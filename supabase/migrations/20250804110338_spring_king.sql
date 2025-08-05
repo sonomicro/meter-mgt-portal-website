@@ -1,0 +1,45 @@
+@@ .. @@
+ ALTER TABLE device_settings ENABLE ROW LEVEL SECURITY;
+
+-CREATE POLICY "Admins can manage all device settings"
+-  ON device_settings
+-  FOR ALL
+-  TO authenticated
+-  USING (is_admin())
+-  WITH CHECK (is_admin());
+-
+-CREATE POLICY "Tenants can read own device settings"
+-  ON device_settings
+-  FOR SELECT
+-  TO authenticated
+-  USING (device_id IN (
+-    SELECT id FROM devices WHERE tenant_id::text = uid()::text
+-  ));
+-
+-CREATE POLICY "Tenants can insert own device settings"
+-  ON device_settings
+-  FOR INSERT
+-  TO authenticated
+-  WITH CHECK (device_id IN (
+-    SELECT id FROM devices WHERE tenant_id::text = uid()::text
+-  ));
+-
+-CREATE POLICY "Tenants can update own device settings"
+-  ON device_settings
+-  FOR UPDATE
+-  TO authenticated
+-  USING (device_id IN (
+-    SELECT id FROM devices WHERE tenant_id::text = uid()::text
+-  ))
+-  WITH CHECK (device_id IN (
+-    SELECT id FROM devices WHERE tenant_id::text = uid()::text
+-  ));
+-
+-CREATE POLICY "Tenants can delete own device settings"
+-  ON device_settings
+-  FOR DELETE
+-  TO authenticated
+-  USING (device_id IN (
+-    SELECT id FROM devices WHERE tenant_id::text = uid()::text
+-  ));
++-- RLS is disabled for device_settings table
