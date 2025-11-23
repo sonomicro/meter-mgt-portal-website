@@ -1,0 +1,120 @@
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                   SUPABASE ENVIRONMENT VARIABLES SETUP                    ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+STEP 1: Access Supabase Dashboard
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+URL: https://supabase.com/dashboard/project/xrmwxqhhaeahabeppvuk
+(Click on your project if not already selected)
+
+
+STEP 2: Navigate to Edge Functions
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Left Sidebar → Edge Functions
+
+
+STEP 3: Select notehub-proxy Function
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Click on: notehub-proxy
+
+You should see:
+  • Status: Active (green)
+  • Last deployed: [timestamp]
+
+
+STEP 4: Open Settings/Configuration
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Look for tabs like:
+  - "Settings"
+  - "Configuration"  
+  - "Environment Variables"
+  - "Secrets"
+
+Click on the tab that manages environment variables
+
+
+STEP 5: Add Environment Variables
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Click: "Add variable" or "+ New variable" or similar button
+
+Add VARIABLE #1:
+┌─────────────────────────────────────────────────────────────┐
+│ Name:  NOTEHUB_CLIENT_ID                                    │
+│ Value: 0de98d7e-8c88-4fd2-9732-2b7b2897e93d                 │
+└─────────────────────────────────────────────────────────────┘
+
+Add VARIABLE #2:
+┌─────────────────────────────────────────────────────────────┐
+│ Name:  NOTEHUB_CLIENT_SECRET                                │
+│ Value: c0cc55868e77c25488016fe224d6c6bedc1c5ccb6579faf...   │
+│        (full value from .env file)                          │
+└─────────────────────────────────────────────────────────────┘
+
+IMPORTANT: Copy the EXACT values from your .env file!
+
+
+STEP 6: Save Changes
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Click: "Save" or "Update" button
+
+The edge function will automatically restart with the new variables.
+This may take 10-30 seconds.
+
+
+STEP 7: Verify
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Run diagnostic script:
+  $ ./diagnose-notehub.sh
+
+Expected result:
+  ✅ All systems operational!
+
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                              TROUBLESHOOTING                              ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+Can't find "Environment Variables" tab?
+  → Try: Settings → Secrets
+  → Try: Function Details → Configuration
+  → Look for a gear icon ⚙️ or settings icon
+
+Variables not showing after save?
+  → Wait 30 seconds and refresh the page
+  → Check the edge function logs for errors
+
+Still getting 404 errors?
+  → Double-check variable names (exact case matters!)
+  → Verify no extra spaces in values
+  → Ensure you copied the FULL secret value
+
+Edge function status shows error?
+  → Click on the function to view logs
+  → Look for "Notehub credentials not configured"
+  → This means variables weren't saved correctly
+
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                           SECURITY REMINDER                               ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+✅ CORRECT: Set in Supabase Dashboard (server-side, secure)
+❌ WRONG:   VITE_NOTEHUB_CLIENT_SECRET in .env (would expose to browser!)
+
+The credentials are only visible to your edge function, not to users.
+
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                            WHAT HAPPENS NEXT                              ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+Once variables are set:
+
+  1. Edge function reads NOTEHUB_CLIENT_ID and NOTEHUB_CLIENT_SECRET
+  2. Edge function authenticates with Notehub using OAuth2
+  3. Edge function proxies requests from your frontend
+  4. Devices load successfully in your application!
+
+Flow:
+  Browser → Supabase Auth → Edge Function → Notehub OAuth2 → Notehub API
+

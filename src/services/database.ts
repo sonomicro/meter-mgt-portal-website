@@ -9,6 +9,38 @@ type Device = Database['public']['Tables']['devices']['Row'];
 type DeviceData = Database['public']['Tables']['device_data']['Row'];
 type Alert = Database['public']['Tables']['alerts']['Row'];
 
+// Reverse geocoding helper
+async function reverseGeocode(lat: number, lon: number): Promise<string> {
+  try {
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
+      {
+        headers: {
+          'User-Agent': 'WaterMonitoringApp/1.0'
+        }
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error('Geocoding failed');
+    }
+
+    const data = await response.json();
+
+    // Extract city/town/region and country
+    const address = data.address || {};
+    const locationParts = [
+      address.city || address.town || address.village || address.county || address.state,
+      address.country
+    ].filter(Boolean);
+
+    return locationParts.length > 0 ? locationParts.join(', ') : 'Unknown Location';
+  } catch (error) {
+    console.error('Reverse geocoding error:', error);
+    return `${lat.toFixed(4)}, ${lon.toFixed(4)}`; // Fallback to coordinates
+  }
+}
+
 // Tenant Management Service
 export class TenantService {
   // Get all tenants (admin only)
@@ -90,16 +122,19 @@ export class TenantService {
     }
 
     try {
-      // First, verify the current user is an admin
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      // First, verify the current user is an admin using custom auth
+      const currentUser = await getCurrentUser();
+      if (!currentUser) {
         throw new Error('No authenticated user found. Please log in first.');
       }
 
-      console.log('Current user:', user.email);
-      console.log('User metadata:', user.user_metadata);
-      console.log('App metadata:', user.app_metadata);
+      if (currentUser.role !== 'admin') {
+        throw new Error('Admin privileges required to create tenants. Please log in with an admin account.');
+      }
 
+      console.log('Current user:', currentUser.email, 'Role:', currentUser.role);
+
+      // Create tenant in Supabase first
       const { data, error } = await supabase
         .from('tenants')
         .insert(tenant)
@@ -108,24 +143,35 @@ export class TenantService {
 
       if (error) {
         console.error('Tenant creation error details:', error);
-        
-        if (error.code === '42501' || error.message.includes('row-level security policy')) {
-          // Check if user has admin role
-          const isAdmin = user.user_metadata?.role === 'admin' || 
-                         user.app_metadata?.role === 'admin' ||
-                         user.email?.includes('admin');
-          
-          if (!isAdmin) {
-            throw new Error('Admin privileges required to create tenants. Please log in with an admin account.');
-          } else {
-            throw new Error('Database policy error: Admin user cannot create tenants. Please check RLS policies in Supabase dashboard.');
-          }
-        }
-        
         throw new Error(`Failed to create tenant: ${error.message}`);
       }
-      
+
       console.log('Tenant created successfully:', data);
+
+      // Sync with Notehub via edge function
+      try {
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        const response = await fetch(`${supabaseUrl}/functions/v1/tenant-sync`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tenant_id: data.id,
+            operation: 'create',
+            company_name: tenant.company
+          })
+        });
+
+        if (!response.ok) {
+          console.warn('Failed to sync tenant with Notehub:', await response.text());
+        } else {
+          console.log('Tenant synced with Notehub successfully');
+        }
+      } catch (syncError) {
+        console.warn('Failed to sync with Notehub (non-fatal):', syncError);
+      }
+
       return data;
     } catch (error: any) {
       console.error('Tenant creation error:', error);
@@ -240,7 +286,7 @@ export class DeviceService {
     try {
       // Get devices from both systems
       const [notehubDevices, supabaseDevices] = await Promise.all([
-        NotehubService.getDevices(),
+        NotehubService.getAllDevicesFromNotehub(),
         this.getDevices()
       ]);
 
@@ -254,47 +300,69 @@ export class DeviceService {
       for (const notehubDevice of notehubDevices) {
         try {
           const supabaseDevice = supabaseDeviceMap.get(notehubDevice.uid);
-          
+
+          const lastActivity = new Date(notehubDevice.last_activity);
+          const now = new Date();
+          const hoursSinceActivity = (now.getTime() - lastActivity.getTime()) / (1000 * 60 * 60);
+          const isOnline = hoursSinceActivity < 24;
+          const batteryLevel = notehubDevice.voltage
+            ? Math.min(100, Math.max(0, ((notehubDevice.voltage - 3.0) / (4.2 - 3.0)) * 100))
+            : undefined;
+
           if (supabaseDevice) {
-            // Update existing device with latest Notehub data
-            const health = await NotehubService.getDeviceHealth(notehubDevice.uid);
             const updates: Database['public']['Tables']['devices']['Update'] = {
-              status: health.isOnline ? 'online' : 'offline',
-              last_seen: health.lastSeen,
-              battery_level: health.batteryLevel,
+              status: isOnline ? 'online' : 'offline',
+              last_seen: notehubDevice.last_activity,
+              battery_level: batteryLevel,
             };
 
-            // Update location if available
-            if (notehubDevice.location) {
+            // Prefer tower_location over GPS location for better accuracy
+            const locationData = notehubDevice.tower_location || notehubDevice.location;
+            if (locationData) {
               updates.coordinates = {
-                lat: notehubDevice.location.latitude,
-                lon: notehubDevice.location.longitude
+                lat: locationData.latitude,
+                lon: locationData.longitude
               };
-              updates.location = `${notehubDevice.location.name}, ${notehubDevice.location.country}`;
+
+              // Use name if available, otherwise reverse geocode
+              if (locationData.name && locationData.name.trim()) {
+                updates.location = `${locationData.name}, ${locationData.country}`;
+              } else {
+                updates.location = await reverseGeocode(locationData.latitude, locationData.longitude);
+              }
             }
 
-            await this.updateDevice(supabaseDevice.id, updates);
+            await this.updateDevice(supabaseDevice.id, updates, true);
             updated++;
           } else {
-            // Add new device from Notehub to Supabase
-            const health = await NotehubService.getDeviceHealth(notehubDevice.uid);
+            // Prefer tower_location over GPS location for better accuracy
+            const locationData = notehubDevice.tower_location || notehubDevice.location;
+
+            let locationName = 'Unknown Location';
+            if (locationData) {
+              // Use name if available, otherwise reverse geocode
+              if (locationData.name && locationData.name.trim()) {
+                locationName = `${locationData.name}, ${locationData.country}`;
+              } else {
+                locationName = await reverseGeocode(locationData.latitude, locationData.longitude);
+              }
+            }
+
             const newDevice: Database['public']['Tables']['devices']['Insert'] = {
-              device_id: notehubDevice.uid.substring(0, 20), // Truncate if needed
+              device_id: notehubDevice.uid.substring(0, 20),
               serial_number: notehubDevice.serial_number || notehubDevice.uid,
               name: `Device ${notehubDevice.uid.substring(0, 8)}`,
-              location: notehubDevice.location ? 
-                `${notehubDevice.location.name}, ${notehubDevice.location.country}` : 
-                'Unknown Location',
-              coordinates: notehubDevice.location ? {
-                lat: notehubDevice.location.latitude,
-                lon: notehubDevice.location.longitude
+              location: locationName,
+              coordinates: locationData ? {
+                lat: locationData.latitude,
+                lon: locationData.longitude
               } : null,
               notehub_device_uid: notehubDevice.uid,
-              status: health.isOnline ? 'online' : 'offline',
-              last_seen: health.lastSeen,
-              battery_level: health.batteryLevel,
-              firmware_version: '1.0.0', // Default version
-              tenant_id: null // Will need to be assigned manually
+              status: isOnline ? 'online' : 'offline',
+              last_seen: notehubDevice.last_activity,
+              battery_level: batteryLevel,
+              firmware_version: '1.0.0',
+              tenant_id: null
             };
 
             await this.createDeviceFromSync(newDevice);
@@ -400,28 +468,7 @@ export class DeviceService {
 
   // Create new device
   static async createDevice(device: Database['public']['Tables']['devices']['Insert']): Promise<Device> {
-    // If device has Notehub UID and Notehub is configured, try to add to Notehub FIRST
-    if (device.notehub_device_uid) {
-      if (!NotehubService.isConfigured()) {
-        console.warn('Notehub is not configured. Device will be added to database only.');
-      } else {
-        try {
-          console.log(`Adding device ${device.notehub_device_uid} to Notehub first...`);
-          await NotehubService.addDevice({
-            device_uid: device.notehub_device_uid,
-            product_uid: undefined, // Will use project default
-            fleet_uid: undefined // Will use project default
-          });
-          console.log(`Successfully added device to Notehub`);
-        } catch (notehubError) {
-          console.error('Failed to add device to Notehub:', notehubError);
-          console.warn('Continuing with database-only device creation. Device can be synced with Notehub later.');
-          // Don't throw error - continue with database creation
-        }
-      }
-    }
-
-    // Add to Supabase database
+    // Add to Supabase database first
     const { data, error } = await supabase
       .from('devices')
       .insert(device)
@@ -430,6 +477,34 @@ export class DeviceService {
 
     if (error) {
       throw error;
+    }
+
+    // Sync with Notehub via edge function (if device has Notehub UID and tenant)
+    if (data.notehub_device_uid && data.tenant_id) {
+      try {
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        const response = await fetch(`${supabaseUrl}/functions/v1/device-sync`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            device_id: data.id,
+            notehub_device_uid: data.notehub_device_uid,
+            operation: 'create',
+            tenant_id: data.tenant_id,
+            fleet_group_id: data.fleet_group_id
+          })
+        });
+
+        if (!response.ok) {
+          console.warn('Failed to sync device with Notehub:', await response.text());
+        } else {
+          console.log('Device synced with Notehub successfully');
+        }
+      } catch (syncError) {
+        console.warn('Failed to sync with Notehub (non-fatal):', syncError);
+      }
     }
 
     return data;
@@ -449,36 +524,20 @@ export class DeviceService {
 
   // Update device
   static async updateDevice(id: string, updates: Database['public']['Tables']['devices']['Update'], skipNotehub: boolean = false): Promise<Device> {
+    console.log(`🔄 DeviceService.updateDevice called:`, { id, updates, skipNotehub });
+
     // Get current device data
     const currentDevice = await this.getDevice(id);
     if (!currentDevice) {
       throw new Error('Device not found');
     }
+    console.log(`📱 Current device:`, currentDevice);
 
-    // If updating Notehub-related fields and device has Notehub UID, update Notehub FIRST
-    if (!skipNotehub && currentDevice.notehub_device_uid && NotehubService.isConfigured()) {
-      const notehubUpdates: any = {};
-      let hasNotehubUpdates = false;
-
-      // Check if we're updating fields that need to be synced to Notehub
-      if (updates.name || updates.location) {
-        // Notehub doesn't directly support name/location updates via API
-        // but we could send configuration notes to the device
-        hasNotehubUpdates = true;
-      }
-
-      if (hasNotehubUpdates) {
-        try {
-          console.log(`Updating device ${currentDevice.notehub_device_uid} in Notehub...`);
-          await NotehubService.updateDevice(currentDevice.notehub_device_uid, notehubUpdates);
-        } catch (notehubError) {
-          console.error('Failed to update device in Notehub:', notehubError);
-          throw new Error(`Failed to update device in Notehub: ${notehubError instanceof Error ? notehubError.message : 'Unknown error'}`);
-        }
-      }
-    }
+    // Note: Notehub device metadata (name, location, etc.) cannot be updated via API
+    // These fields are managed in Supabase only, and synced FROM Notehub during sync operations
 
     // Update in Supabase
+    console.log(`💾 Updating device in Supabase...`);
     const { data, error } = await supabase
       .from('devices')
       .update(updates)
@@ -486,7 +545,12 @@ export class DeviceService {
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error(`❌ Supabase update error:`, error);
+      throw error;
+    }
+
+    console.log(`✅ Device updated successfully:`, data);
     return data;
   }
 
@@ -498,19 +562,31 @@ export class DeviceService {
       throw new Error('Device not found');
     }
 
-    // If device has Notehub UID, remove from Notehub FIRST
-    if (device.notehub_device_uid && NotehubService.isConfigured()) {
+    // If device has Notehub UID, sync deletion with Notehub
+    if (device.notehub_device_uid) {
       try {
-        console.log(`Removing device ${device.notehub_device_uid} from Notehub...`);
-        await NotehubService.removeDevice(device.notehub_device_uid);
-        console.log(`Successfully removed device from Notehub`);
-      } catch (notehubError) {
-        console.error('Failed to remove device from Notehub:', notehubError);
-        throw new Error(`Failed to remove device from Notehub: ${notehubError instanceof Error ? notehubError.message : 'Unknown error'}`);
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        const response = await fetch(`${supabaseUrl}/functions/v1/device-sync`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            device_id: id,
+            notehub_device_uid: device.notehub_device_uid,
+            operation: 'delete'
+          })
+        });
+
+        if (!response.ok) {
+          console.warn('Failed to remove device from Notehub:', await response.text());
+        }
+      } catch (syncError) {
+        console.warn('Failed to sync deletion with Notehub (non-fatal):', syncError);
       }
     }
 
-    // Only delete from Supabase if Notehub operation succeeded (or no Notehub UID)
+    // Delete from Supabase
     const { error } = await supabase
       .from('devices')
       .delete()
@@ -579,18 +655,44 @@ export class DeviceService {
       throw new Error('Device not found or missing Notehub UID');
     }
 
-    if (!NotehubService.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-
     try {
-      // Initiate firmware update in Notehub FIRST
-      await NotehubService.updateDeviceFirmware(device.notehub_device_uid, firmwareVersion);
-      
+      // Create a device command record
+      const { data: command, error } = await supabase
+        .from('device_commands')
+        .insert({
+          device_id: deviceId,
+          command_type: 'firmware_update',
+          payload: { firmware_version: firmwareVersion },
+          status: 'pending'
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Execute command via edge function
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const response = await fetch(`${supabaseUrl}/functions/v1/device-command`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command_id: command.id,
+          device_id: deviceId,
+          command_type: 'firmware_update',
+          payload: { firmware_version: firmwareVersion }
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to execute firmware update: ${await response.text()}`);
+      }
+
       // Update local record to reflect pending firmware update
       await this.updateDevice(deviceId, {
         firmware_version: `${firmwareVersion} (updating...)`
-      }, true); // Skip Notehub update since we just did it
+      }, true);
     } catch (error) {
       console.error(`Failed to update firmware for device ${deviceId}:`, error);
       throw error;
@@ -599,13 +701,9 @@ export class DeviceService {
 
   // Update firmware for multiple devices
   static async updateMultipleDevicesFirmware(deviceIds: string[], firmwareVersion: string): Promise<void> {
-    if (!NotehubService.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-
     // Get devices and their Notehub UIDs
     const devices = await Promise.all(deviceIds.map(id => this.getDevice(id)));
-    const validDevices = devices.filter((device): device is Device => 
+    const validDevices = devices.filter((device): device is Device =>
       device !== null && device.notehub_device_uid !== null
     );
 
@@ -613,19 +711,12 @@ export class DeviceService {
       throw new Error('No valid devices with Notehub UIDs found');
     }
 
-    const notehubUIDs = validDevices.map(device => device.notehub_device_uid!);
-
     try {
-      // Update firmware in Notehub FIRST
-      await NotehubService.updateMultipleDevicesFirmware(notehubUIDs, firmwareVersion);
-      
-      // Update local records
+      // Update firmware for each device using the command pattern
       const updatePromises = validDevices.map(device =>
-        this.updateDevice(device.id, {
-          firmware_version: `${firmwareVersion} (updating...)`
-        }, true) // Skip Notehub update since we just did it
+        this.updateDeviceFirmware(device.id, firmwareVersion)
       );
-      
+
       await Promise.all(updatePromises);
     } catch (error) {
       console.error('Failed to update firmware for multiple devices:', error);
@@ -647,7 +738,7 @@ export class DeviceService {
     try {
       // Remove from Notehub FIRST
       await NotehubService.removeDevice(device.notehub_device_uid);
-      
+
       // Update local record to remove Notehub reference
       return await this.updateDevice(deviceId, {
         notehub_device_uid: null,
@@ -655,6 +746,54 @@ export class DeviceService {
       }, true); // Skip Notehub update since we just removed it
     } catch (error) {
       console.error(`Failed to remove device from Notehub:`, error);
+      throw error;
+    }
+  }
+
+  // Update device environment variables in Notehub
+  static async updateDeviceEnvironmentVariables(deviceId: string, variables: Record<string, string>): Promise<void> {
+    const device = await this.getDevice(deviceId);
+    if (!device || !device.notehub_device_uid) {
+      throw new Error('Device not found or missing Notehub UID');
+    }
+
+    try {
+      // Create a device command record
+      const { data: command, error } = await supabase
+        .from('device_commands')
+        .insert({
+          device_id: deviceId,
+          command_type: 'env_variable',
+          payload: { variables },
+          status: 'pending'
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Execute command via edge function
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const response = await fetch(`${supabaseUrl}/functions/v1/device-command`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command_id: command.id,
+          device_id: deviceId,
+          command_type: 'env_variable',
+          payload: { variables }
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to execute environment variable update: ${await response.text()}`);
+      }
+
+      console.log('Environment variables updated successfully');
+    } catch (error) {
+      console.error(`Failed to update environment variables for device ${deviceId}:`, error);
       throw error;
     }
   }
@@ -877,5 +1016,70 @@ export class AlertService {
       .eq('id', alertId);
 
     if (error) throw error;
+  }
+}
+
+// Fleet Group Service
+export class FleetGroupService {
+  // Get all fleet groups for a tenant
+  static async getFleetGroups(tenantId?: string): Promise<Database['public']['Tables']['fleet_groups']['Row'][]> {
+    let query = supabase
+      .from('fleet_groups')
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (tenantId) {
+      query = query.eq('tenant_id', tenantId);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  }
+
+  // Create a new fleet group
+  static async createFleetGroup(group: Database['public']['Tables']['fleet_groups']['Insert']): Promise<Database['public']['Tables']['fleet_groups']['Row']> {
+    const { data, error } = await supabase
+      .from('fleet_groups')
+      .insert(group)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
+  // Update a fleet group
+  static async updateFleetGroup(id: string, updates: Database['public']['Tables']['fleet_groups']['Update']): Promise<Database['public']['Tables']['fleet_groups']['Row']> {
+    const { data, error } = await supabase
+      .from('fleet_groups')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
+  // Delete a fleet group
+  static async deleteFleetGroup(id: string): Promise<void> {
+    const { error } = await supabase
+      .from('fleet_groups')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+  }
+
+  // Get device count for a group
+  static async getGroupDeviceCount(groupId: string): Promise<number> {
+    const { count, error } = await supabase
+      .from('devices')
+      .select('*', { count: 'exact', head: true })
+      .eq('fleet_group_id', groupId);
+
+    if (error) throw error;
+    return count || 0;
   }
 }

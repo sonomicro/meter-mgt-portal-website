@@ -1,29 +1,64 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AlertTriangle, CheckCircle, Clock, Filter, Search, Bell, BellOff, X, Check } from 'lucide-react';
-import { mockAlerts, mockDevices } from '../../data/mockData';
-import { Alert } from '../../types';
+import { AlertService, DeviceService } from '../../services/database';
+import { getCurrentUser } from '../../services/auth';
+import type { Database } from '../../lib/supabase';
+
+type Alert = Database['public']['Tables']['alerts']['Row'] & {
+  devices?: {
+    id: string;
+    device_id: string;
+    name: string;
+    tenant_id: string | null;
+  };
+};
+type Device = Database['public']['Tables']['devices']['Row'];
 
 export default function Alerts() {
   const [searchTerm, setSearchTerm] = useState('');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
-  const [alerts, setAlerts] = useState(mockAlerts);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const userDevices = mockDevices.filter(d => d.tenantId === '1');
-  const userAlerts = alerts.filter(alert => 
-    userDevices.some(device => device.id === alert.deviceId)
-  );
+  useEffect(() => {
+    loadAlerts();
+  }, []);
+
+  const loadAlerts = async () => {
+    try {
+      setLoading(true);
+      const user = await getCurrentUser();
+      if (!user) return;
+
+      const [alertsData, devicesData] = await Promise.all([
+        AlertService.getAlerts(user.tenant_id || undefined),
+        DeviceService.getDevices(user.tenant_id || undefined)
+      ]);
+
+      setAlerts(alertsData);
+      setDevices(devicesData);
+    } catch (error) {
+      console.error('Error loading alerts:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const userAlerts = alerts;
 
   const filteredAlerts = userAlerts.filter(alert => {
+    const deviceName = alert.devices?.name || alert.device_id?.toString() || '';
     const matchesSearch = alert.message.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         alert.deviceId.toLowerCase().includes(searchTerm.toLowerCase());
+                         deviceName.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesSeverity = severityFilter === 'all' || alert.severity === severityFilter;
-    const matchesStatus = statusFilter === 'all' || 
+    const matchesStatus = statusFilter === 'all' ||
                          (statusFilter === 'resolved' && alert.resolved) ||
                          (statusFilter === 'active' && !alert.resolved);
     const matchesType = typeFilter === 'all' || alert.type === typeFilter;
-    
+
     return matchesSearch && matchesSeverity && matchesStatus && matchesType;
   });
 
@@ -55,28 +90,59 @@ export default function Alerts() {
     }
   };
 
-  const handleResolveAlert = (alertId: string) => {
-    setAlerts(alerts.map(alert => 
-      alert.id === alertId 
-        ? { ...alert, resolved: true }
-        : alert
-    ));
-  };
-
-  const handleDismissAlert = (alertId: string) => {
-    if (confirm('Are you sure you want to dismiss this alert?')) {
-      setAlerts(alerts.filter(alert => alert.id !== alertId));
+  const handleResolveAlert = async (alertId: string) => {
+    try {
+      await AlertService.resolveAlert(alertId);
+      setAlerts(alerts.map(alert =>
+        alert.id === alertId
+          ? { ...alert, resolved: true, resolved_at: new Date().toISOString() }
+          : alert
+      ));
+    } catch (error) {
+      console.error('Error resolving alert:', error);
     }
   };
 
-  const handleResolveAll = () => {
+  const handleDismissAlert = async (alertId: string) => {
+    if (confirm('Are you sure you want to dismiss this alert?')) {
+      try {
+        await AlertService.deleteAlert(alertId);
+        setAlerts(alerts.filter(alert => alert.id !== alertId));
+      } catch (error) {
+        console.error('Error dismissing alert:', error);
+      }
+    }
+  };
+
+  const handleResolveAll = async () => {
     if (confirm('Mark all active alerts as resolved?')) {
-      setAlerts(alerts.map(alert => ({ ...alert, resolved: true })));
+      try {
+        const activeAlertIds = alerts.filter(a => !a.resolved).map(a => a.id);
+        await Promise.all(activeAlertIds.map(id => AlertService.resolveAlert(id)));
+        setAlerts(alerts.map(alert => ({ ...alert, resolved: true, resolved_at: new Date().toISOString() })));
+      } catch (error) {
+        console.error('Error resolving all alerts:', error);
+      }
     }
   };
 
   const activeAlerts = filteredAlerts.filter(a => !a.resolved).length;
   const highPriorityAlerts = filteredAlerts.filter(a => !a.resolved && a.severity === 'high').length;
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Alerts & Notifications</h2>
+          <p className="text-gray-600">Monitor system alerts and device notifications</p>
+        </div>
+        <div className="flex items-center justify-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <span className="ml-3 text-gray-600">Loading alerts...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -218,9 +284,9 @@ export default function Alerts() {
                     </div>
                     <p className="text-sm font-medium text-gray-900 mb-1">{alert.message}</p>
                     <div className="flex items-center space-x-4 text-sm text-gray-500">
-                      <span>Device: {alert.deviceId}</span>
+                      <span>Device: {alert.devices?.name || alert.device_id || 'Unknown'}</span>
                       <span>•</span>
-                      <span>{new Date(alert.timestamp).toLocaleString()}</span>
+                      <span>{alert.created_at ? new Date(alert.created_at).toLocaleString() : 'N/A'}</span>
                     </div>
                   </div>
                   <div className="flex-shrink-0 flex items-center space-x-2">

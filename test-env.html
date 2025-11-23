@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Environment Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #00ff00;
+        }
+        .info { margin: 10px 0; padding: 10px; background: #2a2a2a; }
+        .key { color: #00ffff; }
+        .value { color: #ffff00; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Environment Variables Test</h1>
+    <div class="info">
+        <div class="key">Expected Supabase URL:</div>
+        <div class="value">https://xrmwxqhhaeahabeppvuk.supabase.co</div>
+    </div>
+    <div class="info">
+        <div class="key">Expected Anon Key (first 50 chars):</div>
+        <div class="value">eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdX...</div>
+    </div>
+    <hr>
+    <h2>Test Login</h2>
+    <button onclick="testLogin()">Test Admin Login</button>
+    <div id="result" style="margin-top: 20px;"></div>
+
+    <script type="module">
+        import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+        window.testLogin = async function() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Testing...';
+
+            const supabaseUrl = 'https://xrmwxqhhaeahabeppvuk.supabase.co';
+            const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhybXd4cWhoYWVhaGFiZXBwdnVrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQwNjcxMTksImV4cCI6MjA2OTY0MzExOX0.xnXFnkGw11UI7ibWzeGrjollQwWy-DVJSC7RUcdRzLA';
+
+            const supabase = createClient(supabaseUrl, supabaseKey);
+
+            try {
+                const { data, error } = await supabase.auth.signInWithPassword({
+                    email: 'admin@sonomicro.com',
+                    password: 'demo123'
+                });
+
+                if (error) {
+                    resultDiv.innerHTML = `<div style="color: red;">❌ Error: ${error.message}</div>
+                    <pre>${JSON.stringify(error, null, 2)}</pre>`;
+                } else {
+                    resultDiv.innerHTML = `<div style="color: lime;">✅ Success!</div>
+                    <div>User ID: ${data.user.id}</div>
+                    <div>Email: ${data.user.email}</div>`;
+                }
+            } catch (err) {
+                resultDiv.innerHTML = `<div style="color: red;">❌ Exception: ${err.message}</div>`;
+            }
+        }
+    </script>
+</body>
+</html>

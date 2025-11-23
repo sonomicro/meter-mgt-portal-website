@@ -1,4 +1,3 @@
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -7,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-// Optional webhook security - set this in your Supabase environment variables
+// Webhook security using OpenSSL generated secret
 const WEBHOOK_SECRET = Deno.env.get('NOTEHUB_WEBHOOK_SECRET');
 
 interface NotehubWebhookPayload {
@@ -25,12 +24,23 @@ interface NotehubWebhookPayload {
   body: {
     flow_rate?: number;
     total_volume?: number;
+    VolumeFlowRate?: number;
+    Totalizer?: number;
+    DeltaTOF?: number;
+    SampleNumber?: number;
+    SaturationFlowCount?: number;
+    TotalTOF_DNS?: number;
+    TotalTOF_UPS?: number;
     temperature?: number;
     pressure?: number;
     battery_level?: number;
     voltage?: number;
     temp?: number;
     bars?: number;
+    type?: string;
+    severity?: string;
+    message?: string;
+    description?: string;
     [key: string]: any;
   };
   where_olc?: string;
@@ -44,7 +54,7 @@ interface NotehubWebhookPayload {
   tower_lon?: number;
 }
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -61,7 +71,7 @@ serve(async (req) => {
     )
   }
 
-  // Optional: Verify webhook secret for security
+  // Verify webhook secret for security (using OpenSSL generated secret)
   if (WEBHOOK_SECRET) {
     const authHeader = req.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -84,6 +94,8 @@ serve(async (req) => {
         }
       )
     }
+  } else {
+    console.warn('NOTEHUB_WEBHOOK_SECRET not configured - webhook is not secured');
   }
 
   try {
@@ -118,7 +130,7 @@ serve(async (req) => {
     if (!devices || devices.length === 0) {
       console.log(`Device not found for Notehub UID: ${payload.device}`)
       
-      // Auto-register new devices if they appear in Notehub
+      // Auto-register new devices if they appear in Notehub webhooks
       console.log('Attempting to auto-register device...')
       const newDevice = {
         device_id: payload.device.substring(0, 20),
@@ -153,32 +165,31 @@ serve(async (req) => {
       }
       
       console.log('Auto-registered new device:', createdDevice.name);
-      // Continue processing with the newly created device
-      devices.push(createdDevice);
-      return new Response(
-        JSON.stringify({ message: 'Device not registered in system' }),
-        { 
-          status: 404, 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-        }
-      )
+      // Use the newly created device for processing
+      devices = [createdDevice];
     }
 
     const device = devices[0]
 
     // Process different types of events
-    if (payload.file === 'sensors.qo' && payload.body) {
+    if ((payload.file === 'sensors.qo' || payload.file === 'data.qo') && payload.body) {
       // This is sensor data from the device
       const timestamp = new Date(payload.when * 1000).toISOString()
-      
+
+      // Map data.qo fields to our schema
+      // VolumeFlowRate is in the data.qo body
+      // Totalizer represents total volume
+      const flowRate = payload.body.VolumeFlowRate || payload.body.flow_rate || 0;
+      const totalVolume = payload.body.Totalizer || payload.body.total_volume || 0;
+
       // Insert device data record
       const { error: dataError } = await supabaseClient
         .from('device_data')
         .insert({
           device_id: device.id,
           timestamp: timestamp,
-          flow_rate: payload.body.flow_rate || 0,
-          total_volume: payload.body.total_volume || 0,
+          flow_rate: flowRate,
+          total_volume: totalVolume,
           temperature: payload.body.temperature,
           pressure: payload.body.pressure,
           battery_level: payload.body.battery_level
@@ -199,12 +210,16 @@ serve(async (req) => {
       const deviceUpdates: any = {
         status: 'online',
         last_seen: timestamp,
-        flow_rate: payload.body.flow_rate || 0,
-        total_usage: payload.body.total_volume || 0
+        flow_rate: flowRate,
+        total_usage: totalVolume
       }
 
       if (payload.body.battery_level !== undefined) {
         deviceUpdates.battery_level = payload.body.battery_level
+      }
+
+      if (payload.body.bars !== undefined) {
+        deviceUpdates.signal_strength = payload.body.bars
       }
 
       // Update location if provided
@@ -227,41 +242,75 @@ serve(async (req) => {
         console.error('Error updating device:', updateError)
       }
 
-      // Check for alert conditions
-      const alerts = []
-
-      // Low battery alert
-      if (payload.body.battery_level && payload.body.battery_level < 25) {
-        alerts.push({
-          device_id: device.id,
-          type: 'low_battery',
-          message: `Battery level below 25% (${payload.body.battery_level}%)`,
-          severity: payload.body.battery_level < 10 ? 'high' : 'medium'
-        })
-      }
-
-      // High flow rate alert (potential leak)
-      if (payload.body.flow_rate && payload.body.flow_rate > 100) {
-        alerts.push({
-          device_id: device.id,
-          type: 'leak',
-          message: `Unusually high flow rate detected: ${payload.body.flow_rate}L/min`,
-          severity: 'high'
-        })
-      }
-
-      // Insert alerts if any
-      if (alerts.length > 0) {
-        const { error: alertError } = await supabaseClient
-          .from('alerts')
-          .insert(alerts)
-
-        if (alertError) {
-          console.error('Error inserting alerts:', alertError)
-        }
-      }
-
       console.log(`Processed sensor data for device ${device.name}`)
+    }
+
+    // Track data usage for analytics
+    const payloadSize = JSON.stringify(payload).length;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    // Check if usage record exists for today
+    const { data: existingUsage } = await supabaseClient
+      .from('device_data_usage')
+      .select('id, bytes_received, event_count')
+      .eq('device_id', payload.device)
+      .gte('period_start', today.toISOString())
+      .lt('period_end', tomorrow.toISOString())
+      .maybeSingle();
+
+    if (existingUsage) {
+      // Update existing record
+      await supabaseClient
+        .from('device_data_usage')
+        .update({
+          bytes_received: existingUsage.bytes_received + payloadSize,
+          event_count: existingUsage.event_count + 1
+        })
+        .eq('id', existingUsage.id);
+    } else {
+      // Create new record for today
+      await supabaseClient
+        .from('device_data_usage')
+        .insert({
+          device_id: payload.device,
+          tenant_id: device.tenant_id,
+          bytes_received: payloadSize,
+          event_count: 1,
+          period_start: today.toISOString(),
+          period_end: tomorrow.toISOString()
+        });
+    }
+
+    // Track webhook usage
+    const { data: existingWebhookUsage } = await supabaseClient
+      .from('webhook_usage')
+      .select('id, invocation_count, bytes_processed')
+      .eq('webhook_name', 'notehub-webhook')
+      .gte('period_start', today.toISOString())
+      .lt('period_end', tomorrow.toISOString())
+      .maybeSingle();
+
+    if (existingWebhookUsage) {
+      await supabaseClient
+        .from('webhook_usage')
+        .update({
+          invocation_count: existingWebhookUsage.invocation_count + 1,
+          bytes_processed: existingWebhookUsage.bytes_processed + payloadSize
+        })
+        .eq('id', existingWebhookUsage.id);
+    } else {
+      await supabaseClient
+        .from('webhook_usage')
+        .insert({
+          webhook_name: 'notehub-webhook',
+          invocation_count: 1,
+          bytes_processed: payloadSize,
+          period_start: today.toISOString(),
+          period_end: tomorrow.toISOString()
+        });
     }
 
     // Handle device status events
@@ -275,14 +324,39 @@ serve(async (req) => {
         batteryLevel = Math.round(((payload.body.voltage - 2.7) / (3.3 - 2.7)) * 100);
         batteryLevel = Math.max(0, Math.min(100, batteryLevel));
       }
-      
+
+      const healthUpdates: any = {
+        status: 'online',
+        last_seen: timestamp,
+        battery_level: batteryLevel
+      };
+
+      if (payload.body.bars !== undefined) {
+        healthUpdates.signal_strength = payload.body.bars;
+
+        // Check for low signal strength alert
+        if (payload.body.bars <= 1) {
+          const { error: alertError } = await supabaseClient
+            .from('alerts')
+            .insert({
+              device_id: device.id,
+              type: 'low_signal',
+              message: `Low signal strength detected: ${payload.body.bars} bar${payload.body.bars === 1 ? '' : 's'}`,
+              severity: payload.body.bars === 0 ? 'high' : 'medium',
+              created_at: timestamp
+            })
+
+          if (alertError) {
+            console.error('Error inserting low signal alert:', alertError)
+          } else {
+            console.log(`Created low signal alert for device ${device.name}: ${payload.body.bars} bar(s)`)
+          }
+        }
+      }
+
       const { error: updateError } = await supabaseClient
         .from('devices')
-        .update({
-          status: 'online',
-          last_seen: timestamp,
-          battery_level: batteryLevel
-        })
+        .update(healthUpdates)
         .eq('id', device.id)
 
       if (updateError) {
@@ -319,7 +393,7 @@ serve(async (req) => {
     if (payload.file === '_session.qo') {
       const timestamp = new Date(payload.when * 1000).toISOString()
       const isConnecting = payload.body.why === 'connected' || payload.body.why === 'online';
-      
+
       const { error: updateError } = await supabaseClient
         .from('devices')
         .update({
@@ -335,11 +409,69 @@ serve(async (req) => {
       console.log(`Updated session status for device ${device.name}: ${isConnecting ? 'online' : 'offline'}`)
     }
 
+    // Handle alarm events
+    if (payload.file === 'alarm.qo' && payload.body) {
+      const timestamp = new Date(payload.when * 1000).toISOString()
+      
+      // Determine alert type and severity based on alarm data
+      let alertType = 'alarm';
+      let severity = 'medium';
+      let message = 'Device alarm triggered';
+
+      // Check for specific alarm conditions in the body
+      if (payload.body.type) {
+        alertType = payload.body.type;
+      }
+      if (payload.body.severity) {
+        severity = payload.body.severity;
+      }
+      if (payload.body.message) {
+        message = payload.body.message;
+      } else if (payload.body.description) {
+        message = payload.body.description;
+      } else {
+        // Construct message from available data
+        const alarmDetails = Object.entries(payload.body)
+          .filter(([key]) => !['type', 'severity'].includes(key))
+          .map(([key, value]) => `${key}: ${value}`)
+          .join(', ');
+        if (alarmDetails) {
+          message = `Alarm: ${alarmDetails}`;
+        }
+      }
+
+      // Insert alert into database
+      const { error: alertError } = await supabaseClient
+        .from('alerts')
+        .insert({
+          device_id: device.id,
+          type: alertType,
+          message: message,
+          severity: severity,
+          created_at: timestamp
+        })
+
+      if (alertError) {
+        console.error('Error inserting alarm alert:', alertError)
+      } else {
+        console.log(`Stored alarm for device ${device.name}: ${message}`)
+      }
+
+      // Update device last_seen
+      await supabaseClient
+        .from('devices')
+        .update({
+          last_seen: timestamp
+        })
+        .eq('id', device.id)
+    }
+
     return new Response(
       JSON.stringify({ 
         success: true, 
         message: 'Webhook processed successfully',
         device: device.name,
+        device_uid: payload.device,
         event_type: payload.file,
         timestamp: new Date(payload.when * 1000).toISOString()
       }),
@@ -352,7 +484,10 @@ serve(async (req) => {
   } catch (error) {
     console.error('Webhook processing error:', error)
     return new Response(
-      JSON.stringify({ error: 'Internal server error' }),
+      JSON.stringify({ 
+        error: 'Internal server error',
+        details: error.message 
+      }),
       { 
         status: 500, 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 

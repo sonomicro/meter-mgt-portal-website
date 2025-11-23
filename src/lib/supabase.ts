@@ -16,11 +16,21 @@ if (!isSupabaseConfigured) {
   console.warn('Supabase not configured properly. Please check your environment variables.');
   console.log('VITE_SUPABASE_URL:', supabaseUrl ? 'Set' : 'Missing');
   console.log('VITE_SUPABASE_ANON_KEY:', supabaseAnonKey ? 'Set' : 'Missing');
+} else {
+  console.log('✅ Supabase configured successfully');
+  console.log('📍 URL:', supabaseUrl);
+  console.log('🔑 Anon Key (first 50 chars):', supabaseAnonKey?.substring(0, 50) + '...');
 }
 
 export const supabase = createClient(
-  supabaseUrl!, 
-  supabaseAnonKey!
+  supabaseUrl!,
+  supabaseAnonKey!,
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+    }
+  }
 );
 
 // Service role client for authentication queries (bypasses RLS)

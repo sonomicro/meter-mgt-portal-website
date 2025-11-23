@@ -22,6 +22,7 @@ export interface Device {
   flowRate: number;
   totalUsage: number;
   installDate: string;
+  signal_strength?: number | null;
 }
 
 export interface WaterUsage {

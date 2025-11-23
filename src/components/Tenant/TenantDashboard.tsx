@@ -1,13 +1,62 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Droplets, Wifi, AlertTriangle, Battery } from 'lucide-react';
-import { mockDevices, mockAlerts } from '../../data/mockData';
+import { supabaseServiceRole } from '../../lib/supabase';
+import { getCurrentUser } from '../../services/auth';
+import type { Database } from '../../lib/supabase';
+
+type Device = Database['public']['Tables']['devices']['Row'];
 
 export default function TenantDashboard() {
-  const userDevices = mockDevices.filter(d => d.tenantId === '1');
-  const totalUsage = userDevices.reduce((sum, device) => sum + device.totalUsage, 0);
-  const onlineDevices = userDevices.filter(d => d.status === 'online').length;
-  const activeAlerts = mockAlerts.filter(a => !a.resolved && 
-    userDevices.some(d => d.id === a.deviceId)).length;
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadUserDevices();
+  }, []);
+
+  const loadUserDevices = async () => {
+    try {
+      setLoading(true);
+
+      const user = await getCurrentUser();
+      if (!user || user.role !== 'tenant') {
+        console.log('No tenant user found');
+        return;
+      }
+
+      console.log('Current tenant user:', user);
+      setCurrentUserId(user.id);
+
+      if (!supabaseServiceRole) {
+        console.error('Service role client not available');
+        return;
+      }
+
+      const { data: userDevices, error } = await supabaseServiceRole
+        .from('devices')
+        .select('*')
+        .eq('tenant_id', user.id);
+
+      if (error) {
+        console.error('Error fetching devices:', error);
+        return;
+      }
+
+      console.log('Loaded devices for tenant:', userDevices);
+      setDevices(userDevices || []);
+    } catch (error) {
+      console.error('Error loading devices:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const totalUsage = devices.reduce((sum, device) => sum + device.total_usage, 0);
+  const onlineDevices = devices.filter(d => d.status === 'online').length;
+
+  // Count devices that are offline or in maintenance as alerts
+  const activeAlerts = devices.filter(d => d.status === 'offline' || d.status === 'maintenance').length;
 
   const stats = [
     {
@@ -19,7 +68,7 @@ export default function TenantDashboard() {
     },
     {
       label: 'Active Devices',
-      value: `${onlineDevices}/${userDevices.length}`,
+      value: `${onlineDevices}/${devices.length}`,
       change: 'All systems operational',
       icon: Wifi,
       color: 'green'
@@ -27,18 +76,33 @@ export default function TenantDashboard() {
     {
       label: 'Active Alerts',
       value: activeAlerts,
-      change: activeAlerts === 0 ? 'No issues' : 'Requires attention',
+      change: activeAlerts === 0 ? 'No issues' : `${activeAlerts} device${activeAlerts > 1 ? 's' : ''} offline`,
       icon: AlertTriangle,
       color: activeAlerts > 0 ? 'red' : 'green'
     },
     {
       label: 'Avg Battery',
-      value: `${Math.round(userDevices.reduce((sum, d) => sum + d.batteryLevel, 0) / userDevices.length)}%`,
+      value: devices.length > 0 ? `${Math.round(devices.reduce((sum, d) => sum + d.battery_level, 0) / devices.length)}%` : '0%',
       change: 'Good condition',
       icon: Battery,
-      color: 'indigo'
+      color: 'green'
     }
   ];
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Dashboard</h2>
+          <p className="text-gray-600">Monitor your water usage and device fleet</p>
+        </div>
+        <div className="flex items-center justify-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <span className="ml-3 text-gray-600">Loading devices...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -71,53 +135,50 @@ export default function TenantDashboard() {
         <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Device Status</h3>
           <div className="space-y-4">
-            {userDevices.map((device) => (
-              <div key={device.id} className="flex items-center justify-between py-2">
-                <div className="flex items-center space-x-3">
-                  <div className={`w-3 h-3 rounded-full ${
-                    device.status === 'online' ? 'bg-green-500' :
-                    device.status === 'offline' ? 'bg-red-500' : 'bg-yellow-500'
-                  }`} />
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{device.name}</p>
-                    <p className="text-xs text-gray-500">{device.location}</p>
+            {devices.length === 0 ? (
+              <p className="text-gray-500 text-sm italic">No devices assigned yet</p>
+            ) : (
+              devices.map((device) => (
+                <div key={device.id} className="flex items-center justify-between py-2">
+                  <div className="flex items-center space-x-3">
+                    <div className={`w-3 h-3 rounded-full ${
+                      device.status === 'online' ? 'bg-green-500' :
+                      device.status === 'offline' ? 'bg-red-500' : 'bg-yellow-500'
+                    }`} />
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{device.name}</p>
+                      <p className="text-xs text-gray-500">{device.location}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-gray-900">{device.flow_rate.toFixed(2)}L/min</p>
+                    <p className="text-xs text-gray-500">{device.battery_level}% battery</p>
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-sm font-medium text-gray-900">{device.flowRate}L/min</p>
-                  <p className="text-xs text-gray-500">{device.batteryLevel}% battery</p>
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
 
         <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Usage Trends</h3>
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-gray-600">Today</span>
-              <span className="text-sm font-medium text-gray-900">245L</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div className="bg-blue-600 h-2 rounded-full" style={{ width: '65%' }} />
-            </div>
-            
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-gray-600">This Week</span>
-              <span className="text-sm font-medium text-gray-900">1,842L</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div className="bg-blue-600 h-2 rounded-full" style={{ width: '78%' }} />
-            </div>
-            
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-gray-600">This Month</span>
-              <span className="text-sm font-medium text-gray-900">6,345L</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div className="bg-blue-600 h-2 rounded-full" style={{ width: '92%' }} />
-            </div>
+            {devices.length === 0 || totalUsage === 0 ? (
+              <p className="text-gray-500 text-sm italic">No usage data available yet</p>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">Total Usage</span>
+                  <span className="text-sm font-medium text-gray-900">{totalUsage.toLocaleString()}L</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div className="bg-blue-600 h-2 rounded-full" style={{ width: '100%' }} />
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  Historical usage trends will appear here as your devices report data
+                </p>
+              </>
+            )}
           </div>
         </div>
       </div>

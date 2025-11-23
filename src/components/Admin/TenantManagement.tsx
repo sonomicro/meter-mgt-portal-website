@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { Plus, Search, MoreVertical, Edit, Trash2, Eye, UserPlus, Building, Mail, Phone, Calendar, Filter, MapPin, Activity, Database, Clock, X, AlertTriangle } from 'lucide-react';
+import { Plus, Search, MoreVertical, Edit, Trash2, Eye, UserPlus, Building, Mail, Phone, Calendar, Filter, MapPin, Activity, Database, Clock, X, AlertTriangle, Key, Webhook, Server } from 'lucide-react';
 import { TenantService, DeviceService } from '../../services/database';
-import { hashPassword } from '../../services/auth';
+import { getTotalDataUsage, getWebhookUsage, getProxyUsage } from '../../services/dataUsage';
+import { DeviceFleetAssignmentService } from '../../services/deviceFleetAssignment';
+import { NotehubService } from '../../services/notehub';
 import { supabase } from '../../lib/supabase';
 import type { Database as SupabaseDatabase } from '../../lib/supabase';
 import type { User } from '../../types';
@@ -23,7 +25,13 @@ export default function TenantManagement({ user }: TenantManagementProps) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
+  const [showDeviceAssignModal, setShowDeviceAssignModal] = useState(false);
+  const [showResetPasswordModal, setShowResetPasswordModal] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
+  const [availableDevices, setAvailableDevices] = useState<Device[]>([]);
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<string>>(new Set());
   const [newTenant, setNewTenant] = useState({
     name: '',
     email: '',
@@ -34,11 +42,19 @@ export default function TenantManagement({ user }: TenantManagementProps) {
     password: '',
     confirmPassword: ''
   });
+  const [totalDevicesCount, setTotalDevicesCount] = useState(0);
+  const [totalDataUsageBytes, setTotalDataUsageBytes] = useState(0);
+  const [totalWebhookBytes, setTotalWebhookBytes] = useState(0);
+  const [totalProxyBytes, setTotalProxyBytes] = useState(0);
 
   // Load tenants on component mount
   React.useEffect(() => {
     if (user) {
       loadTenants();
+      loadTotalDevices();
+      loadTotalDataUsage();
+      loadWebhookUsage();
+      loadProxyUsage();
     }
   }, [user]);
 
@@ -56,6 +72,58 @@ export default function TenantManagement({ user }: TenantManagementProps) {
       // Don't set empty array, keep existing tenants if any
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadTotalDevices = async () => {
+    try {
+      const devices = await DeviceService.getDevices();
+      setTotalDevicesCount(devices.length);
+    } catch (error) {
+      console.error('Error loading total devices:', error);
+    }
+  };
+
+  const loadTotalDataUsage = async () => {
+    try {
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - 1);
+      const { totalBytes } = await getTotalDataUsage(startDate, endDate);
+      console.log('Total data usage bytes:', totalBytes);
+      setTotalDataUsageBytes(totalBytes);
+    } catch (error) {
+      console.error('Error loading total data usage:', error);
+    }
+  };
+
+  const loadWebhookUsage = async () => {
+    try {
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - 1);
+      const webhookData = await getWebhookUsage(startDate, endDate);
+      const totalBytes = webhookData.reduce((sum, usage) => sum + Number(usage.bytes_processed), 0);
+      console.log('Total webhook bytes:', totalBytes);
+      setTotalWebhookBytes(totalBytes);
+    } catch (error) {
+      console.error('Error loading webhook usage:', error);
+    }
+  };
+
+  const loadProxyUsage = async () => {
+    try {
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - 1);
+      const proxyData = await getProxyUsage(startDate, endDate);
+      const totalBytes = proxyData.reduce((sum, usage) =>
+        sum + Number(usage.bytes_sent) + Number(usage.bytes_received), 0
+      );
+      console.log('Total proxy bytes:', totalBytes);
+      setTotalProxyBytes(totalBytes);
+    } catch (error) {
+      console.error('Error loading proxy usage:', error);
     }
   };
 
@@ -118,21 +186,13 @@ export default function TenantManagement({ user }: TenantManagementProps) {
             alert('Passwords do not match');
             return;
           }
-          
+
           if (newTenant.password.length < 6) {
             alert('Password must be at least 6 characters long');
             return;
           }
-          
-          // Update password in Supabase Auth
-          const { error: passwordError } = await supabase.auth.updateUser({
-            password: newTenant.password
-          });
-          
-          if (passwordError) {
-            alert('Failed to update password. Please try again.');
-            return;
-          }
+
+          updateData.password_hash = await hashPassword(newTenant.password);
         }
         
         await TenantService.updateTenant(selectedTenant.id, updateData);
@@ -144,6 +204,55 @@ export default function TenantManagement({ user }: TenantManagementProps) {
         console.error('Error updating tenant:', error);
         alert('Failed to update tenant. Please try again.');
       }
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (!selectedTenant) return;
+
+    try {
+      if (newPassword !== confirmNewPassword) {
+        alert('Passwords do not match');
+        return;
+      }
+
+      if (newPassword.length < 6) {
+        alert('Password must be at least 6 characters long');
+        return;
+      }
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        alert('You must be logged in to perform this action');
+        return;
+      }
+
+      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-reset-password`;
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tenantId: selectedTenant.id,
+          newPassword: newPassword
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to reset password');
+      }
+
+      alert('Password reset successfully');
+      setShowResetPasswordModal(false);
+      setSelectedTenant(null);
+      setNewPassword('');
+      setConfirmNewPassword('');
+    } catch (error) {
+      console.error('Error resetting password:', error);
+      alert(error instanceof Error ? error.message : 'Failed to reset password. Please try again.');
     }
   };
 
@@ -174,9 +283,75 @@ export default function TenantManagement({ user }: TenantManagementProps) {
     }
   };
 
-  const handleViewTenant = (tenant: Tenant) => {
+  const handleViewTenant = async (tenant: Tenant) => {
     setSelectedTenant(tenant);
     setShowViewModal(true);
+    await loadTenantDevices(tenant.id);
+  };
+
+  const loadAvailableDevices = async () => {
+    try {
+      const allDevices = await DeviceService.getDevices();
+      const unassignedOrCurrentTenant = allDevices.filter(
+        d => !d.tenant_id || d.tenant_id === selectedTenant?.id
+      );
+      setAvailableDevices(unassignedOrCurrentTenant);
+    } catch (error) {
+      console.error('Error loading available devices:', error);
+    }
+  };
+
+  const openDeviceAssignModal = () => {
+    loadAvailableDevices();
+    setSelectedDeviceIds(new Set());
+    setShowDeviceAssignModal(true);
+  };
+
+  const handleAssignDevices = async () => {
+    if (!selectedTenant || selectedDeviceIds.size === 0) {
+      alert('Please select at least one device');
+      return;
+    }
+
+    try {
+      const deviceIds = Array.from(selectedDeviceIds);
+
+      // Use the shared assignment service
+      await DeviceFleetAssignmentService.assignDevicesToTenant(
+        deviceIds,
+        selectedTenant.id,
+        selectedTenant.company
+      );
+
+      setSelectedDeviceIds(new Set());
+      setShowDeviceAssignModal(false);
+      await loadTenants();
+      await loadTenantDevices(selectedTenant.id);
+      alert(`Successfully assigned ${deviceIds.length} device(s) to ${selectedTenant.name}`);
+    } catch (error) {
+      console.error('Error assigning devices:', error);
+      alert('Failed to assign devices. Please try again.');
+    }
+  };
+
+  const handleUnassignDevice = async (deviceId: string) => {
+    if (!confirm('Are you sure you want to unassign this device?')) {
+      return;
+    }
+
+    try {
+      // Use the shared unassignment service
+      await DeviceFleetAssignmentService.unassignDeviceFromTenant(deviceId);
+
+      await loadTenants();
+      if (selectedTenant) {
+        await loadTenantDevices(selectedTenant.id);
+      }
+      console.log('✅ Device unassignment complete');
+    } catch (error) {
+      console.error('❌ Error unassigning device:', error);
+      alert('Failed to unassign device. Please try again.');
+    }
   };
 
   const handleEditTenant = (tenant: Tenant) => {
@@ -210,6 +385,14 @@ export default function TenantManagement({ user }: TenantManagementProps) {
     return `${mb} MB`;
   };
 
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+  };
+
   const [tenantDevices, setTenantDevices] = useState<{ [key: string]: Device[] }>({});
 
   // Load devices for a specific tenant
@@ -228,8 +411,8 @@ export default function TenantManagement({ user }: TenantManagementProps) {
 
   const totalTenants = tenants.length;
   const activeTenants = tenants.filter(t => t.status === 'active').length;
-  const totalDataUsage = 0; // Will be calculated from actual usage data
-  const totalDevices = 0; // Will be calculated from devices table
+  const totalDataUsage = totalDataUsageBytes;
+  const totalDevices = totalDevicesCount;
 
   return (
     <div className="space-y-6">
@@ -261,7 +444,7 @@ export default function TenantManagement({ user }: TenantManagementProps) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6">
         <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
           <div className="flex items-center justify-between mb-4">
             <div className="p-2 rounded-lg bg-blue-100">
@@ -288,18 +471,6 @@ export default function TenantManagement({ user }: TenantManagementProps) {
 
         <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
           <div className="flex items-center justify-between mb-4">
-            <div className="p-2 rounded-lg bg-purple-100">
-              <Database className="h-6 w-6 text-purple-600" />
-            </div>
-          </div>
-          <div>
-            <p className="text-2xl font-bold text-gray-900 mb-1">{formatDataUsage(totalDataUsage)}</p>
-            <p className="text-sm text-gray-600">Total Data Usage</p>
-          </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-          <div className="flex items-center justify-between mb-4">
             <div className="p-2 rounded-lg bg-teal-100">
               <Activity className="h-6 w-6 text-teal-600" />
             </div>
@@ -307,6 +478,42 @@ export default function TenantManagement({ user }: TenantManagementProps) {
           <div>
             <p className="text-2xl font-bold text-gray-900 mb-1">{totalDevices}</p>
             <p className="text-sm text-gray-600">Total Devices</p>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+          <div className="flex items-center justify-between mb-4">
+            <div className="p-2 rounded-lg bg-purple-100">
+              <Database className="h-6 w-6 text-purple-600" />
+            </div>
+          </div>
+          <div>
+            <p className="text-2xl font-bold text-gray-900 mb-1">{formatBytes(totalDataUsage)}</p>
+            <p className="text-sm text-gray-600">Cellular Data (30 days)</p>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+          <div className="flex items-center justify-between mb-4">
+            <div className="p-2 rounded-lg bg-orange-100">
+              <Webhook className="h-6 w-6 text-orange-600" />
+            </div>
+          </div>
+          <div>
+            <p className="text-2xl font-bold text-gray-900 mb-1">{formatBytes(totalWebhookBytes)}</p>
+            <p className="text-sm text-gray-600">Webhook Traffic (30 days)</p>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+          <div className="flex items-center justify-between mb-4">
+            <div className="p-2 rounded-lg bg-cyan-100">
+              <Server className="h-6 w-6 text-cyan-600" />
+            </div>
+          </div>
+          <div>
+            <p className="text-2xl font-bold text-gray-900 mb-1">{formatBytes(totalProxyBytes)}</p>
+            <p className="text-sm text-gray-600">Proxy Traffic (30 days)</p>
           </div>
         </div>
       </div>
@@ -438,7 +645,17 @@ export default function TenantManagement({ user }: TenantManagementProps) {
                       >
                         <Edit className="h-4 w-4 text-gray-600" />
                       </button>
-                      <button 
+                      <button
+                        onClick={() => {
+                          setSelectedTenant(tenant);
+                          setShowResetPasswordModal(true);
+                        }}
+                        className="p-1 rounded hover:bg-gray-100 transition-colors"
+                        title="Reset Password"
+                      >
+                        <Key className="h-4 w-4 text-blue-600" />
+                      </button>
+                      <button
                         onClick={() => handleDeleteTenant(tenant.id)}
                         className="p-1 rounded hover:bg-gray-100 transition-colors"
                         title="Delete Tenant"
@@ -548,22 +765,45 @@ export default function TenantManagement({ user }: TenantManagementProps) {
                 </div>
 
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Device Details</h4>
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-medium text-gray-700">Device Details</h4>
+                    <button
+                      onClick={openDeviceAssignModal}
+                      className="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center space-x-1"
+                    >
+                      <Plus className="h-4 w-4" />
+                      <span>Add Devices</span>
+                    </button>
+                  </div>
                   <div className="space-y-2">
                     {getTenantDevices(selectedTenant.id).map((device) => (
-                      <div key={device.id} className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                        <div>
-                          <p className="text-sm font-medium text-gray-900">{device.name}</p>
-                          <p className="text-xs text-gray-500">{device.location}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className={`text-xs font-medium ${
-                            device.status === 'online' ? 'text-green-600' : 
-                            device.status === 'offline' ? 'text-red-600' : 'text-yellow-600'
-                          }`}>
-                            {device.status}
+                      <div key={device.id} className="flex items-center justify-between p-2 bg-gray-50 rounded group">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate" title={device.device_id}>
+                            {device.device_id}
                           </p>
-                          <p className="text-xs text-gray-500">{device.batteryLevel}% battery</p>
+                          {device.alias && (
+                            <p className="text-xs text-blue-600 font-medium">{device.alias}</p>
+                          )}
+                          <p className="text-xs text-gray-500">{device.name}</p>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <div className="text-right">
+                            <p className={`text-xs font-medium ${
+                              device.status === 'online' ? 'text-green-600' :
+                              device.status === 'offline' ? 'text-red-600' : 'text-yellow-600'
+                            }`}>
+                              {device.status}
+                            </p>
+                            <p className="text-xs text-gray-500">{device.battery_level}% battery</p>
+                          </div>
+                          <button
+                            onClick={() => handleUnassignDevice(device.id)}
+                            className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 transition-all"
+                            title="Unassign Device"
+                          >
+                            <X className="h-4 w-4 text-red-600" />
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -775,6 +1015,171 @@ export default function TenantManagement({ user }: TenantManagementProps) {
               >
                 Update Tenant
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Password Modal */}
+      {showResetPasswordModal && selectedTenant && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-semibold text-gray-900">Reset Password</h3>
+              <button
+                onClick={() => {
+                  setShowResetPasswordModal(false);
+                  setSelectedTenant(null);
+                  setNewPassword('');
+                  setConfirmNewPassword('');
+                }}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="h-5 w-5 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="mb-6">
+              <p className="text-sm text-gray-600 mb-4">
+                Reset password for <span className="font-semibold">{selectedTenant.name}</span> ({selectedTenant.email})
+              </p>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    New Password
+                  </label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Enter new password"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type="password"
+                    value={confirmNewPassword}
+                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Confirm new password"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => {
+                  setShowResetPasswordModal(false);
+                  setSelectedTenant(null);
+                  setNewPassword('');
+                  setConfirmNewPassword('');
+                }}
+                className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleResetPassword}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2"
+              >
+                <Key className="h-4 w-4" />
+                <span>Reset Password</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Device Assignment Modal */}
+      {showDeviceAssignModal && selectedTenant && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              Assign Devices to {selectedTenant.name}
+            </h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Select devices to assign to this tenant. Only unassigned devices are shown.
+            </p>
+
+            {availableDevices.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-gray-500">No available devices to assign</p>
+              </div>
+            ) : (
+              <div className="space-y-2 mb-4">
+                {availableDevices.map((device) => (
+                  <div
+                    key={device.id}
+                    className={`flex items-center justify-between p-3 border rounded-lg cursor-pointer transition-colors ${
+                      selectedDeviceIds.has(device.id)
+                        ? 'border-blue-500 bg-blue-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                    onClick={() => {
+                      const newSelection = new Set(selectedDeviceIds);
+                      if (newSelection.has(device.id)) {
+                        newSelection.delete(device.id);
+                      } else {
+                        newSelection.add(device.id);
+                      }
+                      setSelectedDeviceIds(newSelection);
+                    }}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedDeviceIds.has(device.id)}
+                        onChange={() => {}}
+                        className="rounded border-gray-300"
+                      />
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{device.name}</p>
+                        <p className="text-xs text-gray-500">{device.device_id} - {device.location}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-xs font-medium ${
+                        device.status === 'online' ? 'text-green-600' :
+                        device.status === 'offline' ? 'text-red-600' : 'text-yellow-600'
+                      }`}>
+                        {device.status}
+                      </p>
+                      <p className="text-xs text-gray-500">{device.battery_level}% battery</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-200">
+              <p className="text-sm text-gray-600">
+                {selectedDeviceIds.size} device{selectedDeviceIds.size !== 1 ? 's' : ''} selected
+              </p>
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => {
+                    setShowDeviceAssignModal(false);
+                    setSelectedDeviceIds(new Set());
+                  }}
+                  className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleAssignDevices}
+                  disabled={selectedDeviceIds.size === 0}
+                  className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Assign Devices
+                </button>
+              </div>
             </div>
           </div>
         </div>

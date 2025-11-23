@@ -1,68 +1,62 @@
 import { supabase } from '../lib/supabase';
-import bcrypt from 'bcryptjs';
 import type { User } from '../types';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export const isSupabaseConfigured = !!(
-  supabaseUrl && 
-  supabaseAnonKey && 
-  supabaseUrl !== 'https://placeholder.supabase.co' && 
+  supabaseUrl &&
+  supabaseAnonKey &&
+  supabaseUrl !== 'https://placeholder.supabase.co' &&
   supabaseAnonKey !== 'placeholder-key' &&
   supabaseUrl.includes('supabase.co') &&
   supabaseAnonKey.length > 50
 );
 
-console.log('🔧 Supabase URL:', supabaseUrl);
-console.log('🔧 Supabase Anon Key length:', supabaseAnonKey?.length);
-console.log('🔧 URL includes supabase.co:', supabaseUrl?.includes('supabase.co'));
-console.log('🔧 URL is not placeholder:', supabaseUrl !== 'https://placeholder.supabase.co');
-console.log('🔧 Key is not placeholder:', supabaseAnonKey !== 'placeholder-key');
-console.log('🔧 Key length > 50:', (supabaseAnonKey?.length || 0) > 50);
-
-export async function hashPassword(password: string): Promise<string> {
-  return await bcrypt.hash(password, 10);
-}
-
 export async function signIn(email: string, password: string, role?: 'admin' | 'tenant') {
-  console.log('🔍 Starting authentication process...');
+  console.log('🔍 Starting authentication...');
   console.log('📧 Email:', email);
   console.log('👤 Expected role:', role);
-  console.log('⚙️ Supabase configured:', isSupabaseConfigured);
 
   if (!isSupabaseConfigured) {
     throw new Error('Supabase is not properly configured. Please check your environment variables.');
   }
 
+  // Clear any existing session to ensure fresh login
+  await supabase.auth.signOut();
+  localStorage.removeItem('currentUser');
+
   try {
-    let userData = null;
-    let userRole = null;
+    console.log('🔐 Attempting Supabase Auth login...');
+    console.log('📧 Email:', email);
+    console.log('🔑 Password length:', password.length);
 
-    if (role === 'admin') {
-      console.log('🔍 Checking admins table...');
-      const { data: adminData, error: adminError } = await supabase
-        .from('admins')
-        .select('*')
-        .eq('email', email)
-        .single();
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-      if (adminError) {
-        console.log('❌ Admin not found:', adminError.message);
-        throw new Error('Invalid email or password. Please check your credentials.');
-      }
+    console.log('📥 Auth response:', {
+      hasError: !!authError,
+      hasUser: !!authData?.user,
+      errorDetails: authError
+    });
 
-      if (adminData) {
-        console.log('📊 Admin data from database:', adminData);
-        console.log('✅ Admin found, verifying password...');
-        console.log('🔐 Stored password hash:', adminData.password_hash);
-        console.log('🔑 Plain text password:', password);
-        const passwordMatch = await bcrypt.compare(password, adminData.password_hash);
-        console.log('🔍 Password match result:', passwordMatch);
-        
-        if (!passwordMatch) {
-          console.log('❌ Password does not match');
-          throw new Error('Invalid email or password. Please check your credentials.');
+    if (!authError && authData.user) {
+      console.log('✅ User authenticated via Supabase Auth');
+
+      let userData: User | null = null;
+      let userRole: 'admin' | 'tenant' | null = null;
+
+      if (role === 'admin') {
+        const { data: adminData, error: adminError } = await supabase
+          .from('admins')
+          .select('*')
+          .eq('user_id', authData.user.id)
+          .maybeSingle();
+
+        if (adminError || !adminData) {
+          throw new Error('Admin account not found or access denied.');
         }
 
         userData = {
@@ -74,36 +68,20 @@ export async function signIn(email: string, password: string, role?: 'admin' | '
           lastLogin: adminData.last_login
         };
         userRole = 'admin';
-      }
-    } else if (role === 'tenant') {
-      console.log('🔍 Checking tenants table...');
-      const { data: tenantData, error: tenantError } = await supabase
-        .from('tenants')
-        .select('*')
-        .eq('email', email)
-        .single();
 
-      if (tenantError) {
-        console.log('❌ Tenant not found:', tenantError.message);
-        throw new Error('Invalid email or password. Please check your credentials.');
-      }
+        await supabase
+          .from('admins')
+          .update({ last_login: new Date().toISOString() })
+          .eq('id', adminData.id);
+      } else if (role === 'tenant') {
+        const { data: tenantData, error: tenantError } = await supabase
+          .from('tenants')
+          .select('*')
+          .eq('user_id', authData.user.id)
+          .maybeSingle();
 
-      if (tenantData) {
-        console.log('📊 Tenant data from database:', tenantData);
-        console.log('✅ Tenant found, verifying password...');
-        console.log('🔐 Stored password hash:', tenantData.password_hash);
-        console.log('🔑 Plain text password:', password);
-        
-        // Generate hash from plaintext to see what it would look like
-        const generatedHash = await bcrypt.hash(password, 10);
-        console.log('🔨 Generated hash from plaintext:', generatedHash);
-        
-        const passwordMatch = await bcrypt.compare(password, tenantData.password_hash);
-        console.log('🔍 Password match result:', passwordMatch);
-        
-        if (!passwordMatch) {
-          console.log('❌ Password does not match');
-          throw new Error('Invalid email or password. Please check your credentials.');
+        if (tenantError || !tenantData) {
+          throw new Error('Tenant account not found or access denied.');
         }
 
         userData = {
@@ -116,30 +94,136 @@ export async function signIn(email: string, password: string, role?: 'admin' | '
           lastLogin: tenantData.last_login
         };
         userRole = 'tenant';
+
+        await supabase
+          .from('tenants')
+          .update({ last_login: new Date().toISOString() })
+          .eq('id', tenantData.id);
+      }
+
+      if (userData) {
+        console.log('✅ User authenticated successfully:', userData);
+        localStorage.setItem('currentUser', JSON.stringify(userData));
+
+        return {
+          user: userData,
+          role: userRole
+        };
       }
     }
 
-    if (!userData) {
-      console.log('❌ No user found with provided credentials');
+    console.log('⚠️ Supabase Auth failed, checking for legacy user...');
+
+    const { data: authCheckData, error: authCheckError } = await supabase.rpc('authenticate_legacy_user', {
+      p_email: email,
+      p_password: password,
+      p_role: role
+    });
+
+    if (authCheckError || !authCheckData) {
+      console.log('❌ Legacy auth check failed:', authCheckError);
       throw new Error('Invalid email or password. Please check your credentials.');
     }
 
-    console.log('✅ User authenticated successfully:', userData);
+    if (authCheckData.error) {
+      console.log('❌ Legacy auth failed:', authCheckData.error);
+      throw new Error('Invalid email or password. Please check your credentials.');
+    }
 
-    // Update last login timestamp
-    const tableName = role === 'admin' ? 'admins' : 'tenants';
-    await supabase
-      .from(tableName)
-      .update({ last_login: new Date().toISOString() })
-      .eq('id', userData.id);
+    if (authCheckData.success && authCheckData.needs_migration) {
+      console.log('✅ Legacy user verified, migrating to Supabase Auth...');
 
-    // Store user session
-    localStorage.setItem('currentUser', JSON.stringify(userData));
+      const apiUrl = `${supabaseUrl}/functions/v1/legacy-auth-migrate`;
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${supabaseAnonKey}`,
+          'apikey': supabaseAnonKey,
+        },
+        body: JSON.stringify({
+          email,
+          password,
+          role,
+          user_id: authCheckData.user_id
+        })
+      });
 
-    return {
-      user: userData,
-      role: userRole
-    };
+      const result = await response.json();
+
+      if (!response.ok) {
+        console.log('❌ Migration failed:', result.error);
+        throw new Error('Migration failed. Please try again or contact support.');
+      }
+
+      if (result.migrated) {
+      console.log('✅ User migrated! Attempting login again...');
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      const { data: retryAuthData, error: retryAuthError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (retryAuthError || !retryAuthData.user) {
+        throw new Error('Migration succeeded but login failed. Please try logging in again.');
+      }
+
+      let userData: User | null = null;
+      let userRole: 'admin' | 'tenant' | null = null;
+
+      if (role === 'admin') {
+        const { data: adminData } = await supabase
+          .from('admins')
+          .select('*')
+          .eq('user_id', retryAuthData.user.id)
+          .maybeSingle();
+
+        if (adminData) {
+          userData = {
+            id: adminData.id,
+            email: adminData.email,
+            name: adminData.name,
+            role: 'admin' as const,
+            createdAt: adminData.created_at,
+            lastLogin: adminData.last_login
+          };
+          userRole = 'admin';
+        }
+      } else if (role === 'tenant') {
+        const { data: tenantData } = await supabase
+          .from('tenants')
+          .select('*')
+          .eq('user_id', retryAuthData.user.id)
+          .maybeSingle();
+
+        if (tenantData) {
+          userData = {
+            id: tenantData.id,
+            email: tenantData.email,
+            name: tenantData.name,
+            role: 'tenant' as const,
+            company: tenantData.company,
+            createdAt: tenantData.created_at,
+            lastLogin: tenantData.last_login
+          };
+          userRole = 'tenant';
+        }
+      }
+
+      if (userData) {
+        console.log('✅ User authenticated successfully after migration:', userData);
+        localStorage.setItem('currentUser', JSON.stringify(userData));
+
+        return {
+          user: userData,
+          role: userRole
+        };
+      }
+      }
+    }
+
+    throw new Error('Invalid email or password. Please check your credentials.');
 
   } catch (error) {
     console.error('❌ Authentication error:', error);
@@ -148,23 +232,72 @@ export async function signIn(email: string, password: string, role?: 'admin' | '
 }
 
 export async function signOut() {
+  await supabase.auth.signOut();
   localStorage.removeItem('currentUser');
   return { error: null };
 }
 
 export async function getCurrentUser(): Promise<User | null> {
-  const userStr = localStorage.getItem('currentUser');
-  
-  if (!userStr) {
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    localStorage.removeItem('currentUser');
     return null;
   }
 
-  try {
-    const user = JSON.parse(userStr);
-    return user;
-  } catch {
-    return null;
+  const userStr = localStorage.getItem('currentUser');
+  if (userStr) {
+    try {
+      return JSON.parse(userStr);
+    } catch {
+      localStorage.removeItem('currentUser');
+    }
   }
+
+  try {
+    const { data: adminData } = await supabase
+      .from('admins')
+      .select('*')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (adminData) {
+      const userData: User = {
+        id: adminData.id,
+        email: adminData.email,
+        name: adminData.name,
+        role: 'admin' as const,
+        createdAt: adminData.created_at,
+        lastLogin: adminData.last_login
+      };
+      localStorage.setItem('currentUser', JSON.stringify(userData));
+      return userData;
+    }
+
+    const { data: tenantData } = await supabase
+      .from('tenants')
+      .select('*')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (tenantData) {
+      const userData: User = {
+        id: tenantData.id,
+        email: tenantData.email,
+        name: tenantData.name,
+        role: 'tenant' as const,
+        company: tenantData.company,
+        createdAt: tenantData.created_at,
+        lastLogin: tenantData.last_login
+      };
+      localStorage.setItem('currentUser', JSON.stringify(userData));
+      return userData;
+    }
+  } catch (error) {
+    console.error('Error fetching user data:', error);
+  }
+
+  return null;
 }
 
 export async function createAdmin(email: string, password: string, name: string) {
@@ -172,25 +305,43 @@ export async function createAdmin(email: string, password: string, name: string)
     throw new Error('Supabase is not properly configured. Please check your environment variables.');
   }
 
-  const hashedPassword = await hashPassword(password);
-  console.log('🔐 Creating admin with hashed password:', hashedPassword);
-  
-  const { data, error } = await supabase
+  const { data: authData, error: authError } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        name,
+        role: 'admin'
+      }
+    }
+  });
+
+  if (authError) {
+    console.error('Error creating auth user:', authError);
+    throw new Error('Failed to create admin account: ' + authError.message);
+  }
+
+  if (!authData.user) {
+    throw new Error('Failed to create admin account.');
+  }
+
+  const { data: adminData, error: adminError } = await supabase
     .from('admins')
     .insert([{
+      user_id: authData.user.id,
       email: email,
-      password_hash: hashedPassword,
+      password_hash: '',
       name: name
     }])
     .select()
-    .single();
+    .maybeSingle();
 
-  if (error) {
-    console.error('Error creating admin:', error);
-    throw new Error('Failed to create admin account: ' + error.message);
+  if (adminError) {
+    console.error('Error creating admin record:', adminError);
+    throw new Error('Failed to create admin account: ' + adminError.message);
   }
-  
-  return data;
+
+  return adminData;
 }
 
 export async function createTenant(tenantData: any) {
@@ -198,14 +349,32 @@ export async function createTenant(tenantData: any) {
     throw new Error('Supabase is not properly configured. Please check your environment variables.');
   }
 
-  const hashedPassword = await hashPassword(tenantData.password);
-  console.log('🔐 Creating tenant with hashed password:', hashedPassword);
-  
-  const { data, error } = await supabase
+  const { data: authData, error: authError } = await supabase.auth.signUp({
+    email: tenantData.email,
+    password: tenantData.password,
+    options: {
+      data: {
+        name: tenantData.name,
+        role: 'tenant'
+      }
+    }
+  });
+
+  if (authError) {
+    console.error('Error creating auth user:', authError);
+    throw new Error('Failed to create tenant account: ' + authError.message);
+  }
+
+  if (!authData.user) {
+    throw new Error('Failed to create tenant account.');
+  }
+
+  const { data: tenantRecord, error: tenantError } = await supabase
     .from('tenants')
     .insert([{
+      user_id: authData.user.id,
       email: tenantData.email,
-      password_hash: hashedPassword,
+      password_hash: '',
       name: tenantData.name,
       company: tenantData.company,
       phone: tenantData.phone,
@@ -213,33 +382,24 @@ export async function createTenant(tenantData: any) {
       plan: tenantData.plan || 'basic'
     }])
     .select()
-    .single();
+    .maybeSingle();
 
-  if (error) {
-    console.error('Error creating tenant:', error);
-    throw new Error('Failed to create tenant account: ' + error.message);
+  if (tenantError) {
+    console.error('Error creating tenant record:', tenantError);
+    throw new Error('Failed to create tenant account: ' + tenantError.message);
   }
-  
-  return data;
+
+  return tenantRecord;
 }
 
 export async function updatePassword(newPassword: string) {
-  const user = await getCurrentUser();
-  if (!user) {
-    throw new Error('No authenticated user');
+  const { error } = await supabase.auth.updateUser({
+    password: newPassword
+  });
+
+  if (error) {
+    throw new Error('Failed to update password: ' + error.message);
   }
-
-  const hashedPassword = await hashPassword(newPassword);
-  
-  // Update in the appropriate table based on user role
-  const tableName = user.role === 'admin' ? 'admins' : 'tenants';
-  
-  const { error } = await supabase
-    .from(tableName)
-    .update({ password_hash: hashedPassword })
-    .eq('email', user.email);
-
-  if (error) throw error;
 }
 
 export class AuthService {

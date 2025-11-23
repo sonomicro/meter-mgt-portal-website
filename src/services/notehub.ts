@@ -1,27 +1,71 @@
-import axios from 'axios';
+import axios from "axios";
 
-// Notehub.io API configuration
-const NOTEHUB_BASE_URL = 'https://api.notefile.net';
-const NOTEHUB_PROJECT_UID = import.meta.env.VITE_NOTEHUB_PROJECT_UID || import.meta.env.VITE_NOTEHUB_PROJECT_ID;
-const NOTEHUB_AUTH_TOKEN = import.meta.env.VITE_NOTEHUB_AUTH_TOKEN;
+/**
+ * ENV you should have in your Bolt project:
+ * - VITE_SUPABASE_URL             e.g. https://xrmwxqhhaeahabeppvuk.supabase.co
+ * - VITE_NOTEHUB_PROJECT_UID      e.g. app:7c135a20-7d42-4a5e-a4a6-059bb04a72c0
+ *
+ * DO NOT include NOTEHUB client_id/secret in the browser.
+ * Those live only in the Supabase Edge Function (notehub-proxy).
+ */
 
-// Check if Notehub is configured
-const isNotehubConfigured = NOTEHUB_PROJECT_UID && NOTEHUB_AUTH_TOKEN;
+// Use the Supabase URL to construct the functions URL
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-if (!isNotehubConfigured) {
-  console.warn('Notehub environment variables not configured. Some features will be disabled.');
+if (!SUPABASE_URL) {
+  console.error('VITE_SUPABASE_URL is not configured');
 }
 
-// Create axios instance with default headers
+if (!SUPABASE_ANON_KEY) {
+  console.error('VITE_SUPABASE_ANON_KEY is not configured');
+}
+
+const PROXY_BASE = `${SUPABASE_URL}/functions/v1/notehub-proxy`;
+
+// Ensure the project UID includes `app:` (required by Notehub)
+const ensureAppPrefix = (uid?: string) =>
+  uid?.startsWith("app:") ? uid : uid ? `app:${uid}` : "";
+
+const NOTEHUB_PROJECT_UID = ensureAppPrefix(
+  import.meta.env.VITE_NOTEHUB_PROJECT_UID
+);
+
+if (!NOTEHUB_PROJECT_UID || NOTEHUB_PROJECT_UID === "app:") {
+  console.warn(
+    "⚠️ VITE_NOTEHUB_PROJECT_UID is missing or invalid. Set it to something like 'app:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'."
+  );
+}
+
+// Axios instance targeting the Supabase Edge Function proxy
 const notehubApi = axios.create({
-  baseURL: NOTEHUB_BASE_URL,
-  headers: {
-    'Authorization': `Bearer ${NOTEHUB_AUTH_TOKEN}`,
-    'Content-Type': 'application/json',
-  },
+  baseURL: PROXY_BASE,
+  timeout: 30000, // 30 second timeout
 });
 
-// Types for Notehub API responses
+// Interceptor: add headers appropriately
+notehubApi.interceptors.request.use((config) => {
+  // Only set content-type when sending a body
+  const hasBody = !!config.data;
+  if (hasBody && !config.headers?.["Content-Type"]) {
+    config.headers = { ...(config.headers || {}), "Content-Type": "application/json" };
+  }
+
+  // Add Supabase authorization header (required because verifyJWT is true on the edge function)
+  if (SUPABASE_ANON_KEY) {
+    config.headers = {
+      ...(config.headers || {}),
+      "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+      "apikey": SUPABASE_ANON_KEY
+    };
+  }
+
+  return config;
+});
+
+/** =========================
+ * Types
+ * ========================*/
 export interface NotehubDevice {
   uid: string;
   serial_number: string;
@@ -29,7 +73,7 @@ export interface NotehubDevice {
   fleet_uids: string[];
   last_activity: string;
   contact: string;
-  location: {
+  location?: {
     when: number;
     name: string;
     country: string;
@@ -37,22 +81,25 @@ export interface NotehubDevice {
     latitude: number;
     longitude: number;
   };
-  tower_info: {
+  tower_location?: {
     when: number;
-    lat: number;
-    lon: number;
+    name: string;
+    country: string;
+    timezone: string;
+    latitude: number;
+    longitude: number;
   };
-  voltage: number;
-  temp: number;
-  bars: number;
-  moved: number;
-  orientation: string;
-  rssi: number;
-  sinr: number;
-  rat: string;
-  rssir: number;
-  rsrp: number;
-  rsrq: number;
+  voltage?: number;
+  temp?: number;
+  bars?: number;
+  moved?: number;
+  orientation?: string;
+  rssi?: number;
+  sinr?: number;
+  rat?: string;
+  rssir?: number;
+  rsrp?: number;
+  rsrq?: number;
 }
 
 export interface NotehubEvent {
@@ -67,49 +114,33 @@ export interface NotehubEvent {
   file: string;
   note: string;
   updates: number;
-  body: {
-    flow_rate?: number;
-    total_volume?: number;
-    temperature?: number;
-    pressure?: number;
-    battery_level?: number;
-    [key: string]: any;
-  };
-  where_olc: string;
-  where_lat: number;
-  where_lon: number;
-  where_location: string;
-  where_country: string;
-  where_timezone: string;
-  tower_when: number;
-  tower_lat: number;
-  tower_lon: number;
+  body: Record<string, any>;
+  where_olc?: string;
+  where_lat?: number;
+  where_lon?: number;
+  where_location?: string;
+  where_country?: string;
+  where_timezone?: string;
+  tower_when?: number;
+  tower_lat?: number;
+  tower_lon?: number;
 }
 
 export interface NotehubFirmware {
   version: string;
-  description: string;
+  description?: string;
   created: string;
   size: number;
   md5: string;
   type: string;
-  built: string;
+  built?: string;
 }
 
-export interface WaterFlowData {
-  deviceId: string;
-  timestamp: string;
-  flowRate: number;
-  totalVolume: number;
-  temperature?: number;
-  pressure?: number;
-  batteryLevel?: number;
-  location?: {
-    lat: number;
-    lon: number;
-    country: string;
-    timezone: string;
-  };
+export interface NotehubFleet {
+  uid: string;
+  label: string;
+  created: string;
+  device_count: number;
 }
 
 export interface DeviceProvisionRequest {
@@ -129,450 +160,318 @@ export interface FirmwareUpdateRequest {
   fleet_uid?: string;
 }
 
-// Notehub API service class
+export interface WaterFlowData {
+  deviceId: string;
+  timestamp: string;
+  flowRate: number;
+  totalVolume: number;
+  temperature?: number;
+  pressure?: number;
+  batteryLevel?: number;
+  location?: {
+    lat: number;
+    lon: number;
+    country?: string;
+    timezone?: string;
+  };
+}
+
+/** =========================
+ * Service
+ * ========================*/
 export class NotehubService {
-  // Check if Notehub is configured
   static isConfigured(): boolean {
-    return isNotehubConfigured;
+    return !!(NOTEHUB_PROJECT_UID && NOTEHUB_PROJECT_UID !== "app:");
   }
 
-  // Get all devices in the project
-  static async getDevices(): Promise<NotehubDevice[]> {
+  // Devices (project)
+  static async getAllDevicesFromNotehub(): Promise<NotehubDevice[]> {
     if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
+      throw new Error(`Notehub is not configured. VITE_NOTEHUB_PROJECT_UID is ${NOTEHUB_PROJECT_UID || 'missing'}`);
     }
-    
     try {
-      const response = await notehubApi.get(`/v1/projects/${NOTEHUB_PROJECT_UID}/devices`);
-      return response.data.devices || [];
-    } catch (error) {
-      console.error('Error fetching devices from Notehub:', error);
-      throw error;
-    }
-  }
-
-  // Get specific device information
-  static async getDevice(deviceUID: string): Promise<NotehubDevice> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
-    try {
-      const response = await notehubApi.get(`/v1/projects/${NOTEHUB_PROJECT_UID}/devices/${deviceUID}`);
-      return response.data;
-    } catch (error) {
-      console.error(`Error fetching device ${deviceUID} from Notehub:`, error);
-      throw error;
-    }
-  }
-
-  // Add new device to Notehub
-  static async addDevice(request: DeviceProvisionRequest): Promise<NotehubDevice> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
-    try {
-      const response = await notehubApi.post(`/v1/projects/${NOTEHUB_PROJECT_UID}/devices`, {
-        device_uid: request.device_uid,
-        product_uid: request.product_uid,
-        fleet_uid: request.fleet_uid
-      });
-      return response.data;
-    } catch (error) {
-      console.error(`Error adding device ${request.device_uid} to Notehub:`, error);
-      throw error;
-    }
-  }
-
-  // Remove device from Notehub
-  static async removeDevice(deviceUID: string): Promise<void> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
-    try {
-      await notehubApi.delete(`/v1/projects/${NOTEHUB_PROJECT_UID}/devices/${deviceUID}`);
-    } catch (error) {
-      console.error(`Error removing device ${deviceUID} from Notehub:`, error);
-      throw error;
-    }
-  }
-
-  // Update device in Notehub
-  static async updateDevice(deviceUID: string, updates: DeviceUpdateRequest): Promise<NotehubDevice> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
-    try {
-      const response = await notehubApi.put(`/v1/projects/${NOTEHUB_PROJECT_UID}/devices/${deviceUID}`, updates);
-      return response.data;
-    } catch (error) {
-      console.error(`Error updating device ${deviceUID} in Notehub:`, error);
-      throw error;
-    }
-  }
-
-  // Get events for a specific device (live data)
-  static async getDeviceEvents(deviceUID: string, limit: number = 100): Promise<NotehubEvent[]> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
-    try {
-      const response = await notehubApi.get(`/v1/projects/${NOTEHUB_PROJECT_UID}/events`, {
-        params: {
-          device: deviceUID,
-          limit,
-          sort_order: 'desc'
-        }
-      });
-      return response.data.events || [];
-    } catch (error) {
-      console.error(`Error fetching events for device ${deviceUID}:`, error);
-      throw error;
-    }
-  }
-
-  // Get latest water flow data for all devices
-  static async getLatestWaterFlowData(): Promise<WaterFlowData[]> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
-    try {
-      const response = await notehubApi.get(`/v1/projects/${NOTEHUB_PROJECT_UID}/events`, {
-        params: {
-          file: 'sensors.qo', // Assuming water flow data comes from sensors.qo file
-          limit: 1000,
-          sort_order: 'desc'
-        }
-      });
-
-      const events: NotehubEvent[] = response.data.events || [];
-      
-      // Group events by device and get the latest for each
-      const deviceMap = new Map<string, NotehubEvent>();
-      
-      events.forEach(event => {
-        if (!deviceMap.has(event.device) || event.when > deviceMap.get(event.device)!.when) {
-          deviceMap.set(event.device, event);
-        }
-      });
-
-      // Convert to WaterFlowData format
-      return Array.from(deviceMap.values()).map(event => ({
-        deviceId: event.device,
-        timestamp: new Date(event.when * 1000).toISOString(),
-        flowRate: event.body.flow_rate || 0,
-        totalVolume: event.body.total_volume || 0,
-        temperature: event.body.temperature,
-        pressure: event.body.pressure,
-        batteryLevel: event.body.battery_level,
-        location: {
-          lat: event.where_lat,
-          lon: event.where_lon,
-          country: event.where_country,
-          timezone: event.where_timezone
-        }
-      }));
-    } catch (error) {
-      console.error('Error fetching water flow data from Notehub:', error);
-      throw error;
-    }
-  }
-
-  // Get available firmware versions
-  static async getFirmwareVersions(): Promise<NotehubFirmware[]> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
-    try {
-      const response = await notehubApi.get(`/v1/projects/${NOTEHUB_PROJECT_UID}/firmware`);
-      return response.data.firmware || [];
-    } catch (error) {
-      console.error('Error fetching firmware versions from Notehub:', error);
-      throw error;
-    }
-  }
-
-  // Initiate firmware update for specific device
-  static async updateDeviceFirmware(deviceUID: string, firmwareVersion: string): Promise<void> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
-    try {
-      await notehubApi.post(`/v1/projects/${NOTEHUB_PROJECT_UID}/devices/${deviceUID}/firmware`, {
-        firmware_version: firmwareVersion
-      });
-    } catch (error) {
-      console.error(`Error updating firmware for device ${deviceUID}:`, error);
-      throw error;
-    }
-  }
-
-  // Initiate firmware update for multiple devices
-  static async updateMultipleDevicesFirmware(deviceUIDs: string[], firmwareVersion: string): Promise<void> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
-    try {
-      const updatePromises = deviceUIDs.map(deviceUID => 
-        this.updateDeviceFirmware(deviceUID, firmwareVersion)
+      console.log('🔍 Fetching devices from Notehub via proxy...');
+      console.log('📋 Using project UID:', NOTEHUB_PROJECT_UID);
+      const r = await notehubApi.get(
+        `/v1/projects/${NOTEHUB_PROJECT_UID}/devices`
       );
-      await Promise.all(updatePromises);
-    } catch (error) {
-      console.error('Error updating firmware for multiple devices:', error);
-      throw error;
+      console.log('✅ Successfully fetched devices:', r.data);
+      return r.data.devices || [];
+    } catch (err: any) {
+      console.error('❌ Error fetching devices:', err.response?.data || err.message);
+      console.error('❌ Request URL was:', `/v1/projects/${NOTEHUB_PROJECT_UID}/devices`);
+      this._throwFriendly(err, "fetch devices");
     }
   }
 
-  // Initiate firmware update for entire fleet
-  static async updateFleetFirmware(fleetUID: string, firmwareVersion: string): Promise<void> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
+  static async getDevice(deviceUID: string): Promise<NotehubDevice> {
+    if (!this.isConfigured()) throw new Error("Notehub is not configured");
     try {
-      await notehubApi.post(`/v1/projects/${NOTEHUB_PROJECT_UID}/fleets/${fleetUID}/firmware`, {
-        firmware_version: firmwareVersion
-      });
-    } catch (error) {
-      console.error(`Error updating firmware for fleet ${fleetUID}:`, error);
-      throw error;
+      const r = await notehubApi.get(
+        `/v1/projects/${NOTEHUB_PROJECT_UID}/devices/${encodeURIComponent(
+          deviceUID
+        )}`
+      );
+      return r.data;
+    } catch (err: any) {
+      this._throwFriendly(err, `fetch device ${deviceUID}`);
     }
   }
 
-  // Register a new device with Notehub (legacy method - kept for compatibility)
-  static async registerDevice(deviceUID: string, fleetUID?: string): Promise<void> {
-    return this.addDevice({
-      device_uid: deviceUID,
-      fleet_uid: fleetUID
-    }).then(() => {});
-  }
-
-  // Send a note to a device (for configuration or commands)
-  static async sendNoteToDevice(deviceUID: string, noteFile: string, body: any): Promise<void> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
+  // Fleets
+  static async getFleets(): Promise<NotehubFleet[]> {
+    if (!this.isConfigured()) throw new Error("Notehub is not configured");
     try {
-      await notehubApi.post(`/v1/projects/${NOTEHUB_PROJECT_UID}/devices/${deviceUID}/notes`, {
-        file: noteFile,
-        body
-      });
-    } catch (error) {
-      console.error(`Error sending note to device ${deviceUID}:`, error);
-      throw error;
+      const r = await notehubApi.get(
+        `/v1/projects/${NOTEHUB_PROJECT_UID}/fleets`
+      );
+      return r.data.fleets || [];
+    } catch (err: any) {
+      this._throwFriendly(err, "fetch fleets");
     }
   }
 
-  // Get device health status
+  static async getFleetDevices(fleetUID: string): Promise<NotehubDevice[]> {
+    if (!this.isConfigured()) throw new Error("Notehub is not configured");
+    try {
+      const r = await notehubApi.get(
+        `/v1/projects/${NOTEHUB_PROJECT_UID}/fleets/${encodeURIComponent(
+          fleetUID
+        )}/devices`
+      );
+      return r.data.devices || [];
+    } catch (err: any) {
+      this._throwFriendly(err, `fetch devices for fleet ${fleetUID}`);
+    }
+  }
+
+  static async createFleet(fleetName: string): Promise<NotehubFleet> {
+    if (!this.isConfigured()) throw new Error("Notehub is not configured");
+    try {
+      const r = await notehubApi.post(
+        `/v1/projects/${NOTEHUB_PROJECT_UID}/fleets`,
+        { label: fleetName }
+      );
+      return r.data;
+    } catch (err: any) {
+      this._throwFriendly(err, `create fleet "${fleetName}"`);
+    }
+  }
+
+  // Device updates
+  static async updateDevice(
+    deviceUID: string,
+    updates: DeviceUpdateRequest
+  ): Promise<NotehubDevice> {
+    if (!this.isConfigured()) throw new Error("Notehub is not configured");
+    try {
+      const url = `/v1/projects/${NOTEHUB_PROJECT_UID}/devices/${encodeURIComponent(deviceUID)}`;
+      console.log('🔄 NotehubService.updateDevice called:', { deviceUID, updates, url });
+
+      const r = await notehubApi.put(url, updates);
+
+      console.log('✅ NotehubService.updateDevice response:', r.data);
+      return r.data;
+    } catch (err: any) {
+      console.error('❌ NotehubService.updateDevice error:', { deviceUID, updates, error: err.response?.data || err.message });
+      this._throwFriendly(err, `update device ${deviceUID}`);
+    }
+  }
+
+  // Add device to fleet(s)
+  static async addDeviceToFleets(
+    deviceUID: string,
+    fleetUIDs: string[]
+  ): Promise<void> {
+    if (!this.isConfigured()) throw new Error("Notehub is not configured");
+    try {
+      const url = `/v1/projects/${NOTEHUB_PROJECT_UID}/devices/${encodeURIComponent(deviceUID)}/fleets`;
+      console.log('🔄 NotehubService.addDeviceToFleets called:', { deviceUID, fleetUIDs, url });
+
+      const r = await notehubApi.put(url, { fleet_uids: fleetUIDs });
+
+      console.log('✅ NotehubService.addDeviceToFleets response:', r.data);
+    } catch (err: any) {
+      console.error('❌ NotehubService.addDeviceToFleets error:', { deviceUID, fleetUIDs, error: err.response?.data || err.message });
+      this._throwFriendly(err, `add device to fleets ${deviceUID}`);
+    }
+  }
+
+  // Remove device from fleet(s)
+  static async removeDeviceFromFleets(
+    deviceUID: string,
+    fleetUIDs: string[]
+  ): Promise<void> {
+    if (!this.isConfigured()) throw new Error("Notehub is not configured");
+    try {
+      const url = `/v1/projects/${NOTEHUB_PROJECT_UID}/devices/${encodeURIComponent(deviceUID)}/fleets`;
+      console.log('🔄 NotehubService.removeDeviceFromFleets called:', { deviceUID, fleetUIDs, url });
+
+      const r = await notehubApi.delete(url, { data: { fleet_uids: fleetUIDs } });
+
+      console.log('✅ NotehubService.removeDeviceFromFleets response:', r.data);
+    } catch (err: any) {
+      console.error('❌ NotehubService.removeDeviceFromFleets error:', { deviceUID, fleetUIDs, error: err.response?.data || err.message });
+      this._throwFriendly(err, `remove device from fleets ${deviceUID}`);
+    }
+  }
+
+  // Update device fleet assignments (legacy - kept for compatibility)
+  static async updateDeviceFleets(
+    deviceUID: string,
+    fleetUIDs: string[]
+  ): Promise<void> {
+    return this.addDeviceToFleets(deviceUID, fleetUIDs);
+  }
+
+  // Events (project or device)
+  static async getDeviceEvents(
+    deviceUID: string,
+    limit = 100
+  ): Promise<NotehubEvent[]> {
+    if (!this.isConfigured()) throw new Error("Notehub is not configured");
+    try {
+      const r = await notehubApi.get(
+        `/v1/projects/${NOTEHUB_PROJECT_UID}/events`,
+        {
+          params: { device: deviceUID, limit, sort_order: "desc" },
+        }
+      );
+      return r.data.events || [];
+    } catch (err: any) {
+      this._throwFriendly(err, `fetch events for ${deviceUID}`);
+    }
+  }
+
+  // Firmware
+  static async getFirmwareVersions(): Promise<NotehubFirmware[]> {
+    if (!this.isConfigured()) throw new Error("Notehub is not configured");
+    try {
+      const r = await notehubApi.get(
+        `/v1/projects/${NOTEHUB_PROJECT_UID}/firmware`
+      );
+      return r.data.firmware || [];
+    } catch (err: any) {
+      this._throwFriendly(err, "fetch firmware versions");
+    }
+  }
+
+  static async updateDeviceFirmware(
+    deviceUID: string,
+    firmwareVersion: string
+  ): Promise<void> {
+    if (!this.isConfigured()) throw new Error("Notehub is not configured");
+    try {
+      await notehubApi.post(
+        `/v1/projects/${NOTEHUB_PROJECT_UID}/devices/${encodeURIComponent(
+          deviceUID
+        )}/firmware`,
+        { firmware_version: firmwareVersion }
+      );
+    } catch (err: any) {
+      this._throwFriendly(err, `update firmware for ${deviceUID}`);
+    }
+  }
+
+  static async updateMultipleDevicesFirmware(
+    deviceUIDs: string[],
+    firmwareVersion: string
+  ): Promise<void> {
+    await Promise.all(
+      deviceUIDs.map((uid) =>
+        this.updateDeviceFirmware(uid, firmwareVersion)
+      )
+    );
+  }
+
+  static async updateFleetFirmware(
+    fleetUID: string,
+    firmwareVersion: string
+  ): Promise<void> {
+    if (!this.isConfigured()) throw new Error("Notehub is not configured");
+    try {
+      await notehubApi.post(
+        `/v1/projects/${NOTEHUB_PROJECT_UID}/fleets/${encodeURIComponent(
+          fleetUID
+        )}/firmware`,
+        { firmware_version: firmwareVersion }
+      );
+    } catch (err: any) {
+      this._throwFriendly(err, `update firmware for fleet ${fleetUID}`);
+    }
+  }
+
   static async getDeviceHealth(deviceUID: string): Promise<{
     isOnline: boolean;
     lastSeen: string;
-    batteryLevel: number;
-    signalStrength: number;
+    batteryLevel?: number;
   }> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
+    if (!this.isConfigured()) throw new Error("Notehub is not configured");
     try {
       const device = await this.getDevice(deviceUID);
-      const now = Date.now() / 1000;
-      const lastActivity = new Date(device.last_activity).getTime() / 1000;
-      const isOnline = (now - lastActivity) < 300; // Consider online if seen within 5 minutes
+      const lastActivity = new Date(device.last_activity);
+      const now = new Date();
+      const hoursSinceActivity = (now.getTime() - lastActivity.getTime()) / (1000 * 60 * 60);
 
       return {
-        isOnline,
+        isOnline: hoursSinceActivity < 24,
         lastSeen: device.last_activity,
-        batteryLevel: Math.round((device.voltage / 5.0) * 100), // Assuming 5V max
-        signalStrength: device.bars
+        batteryLevel: device.voltage ? Math.min(100, Math.max(0, ((device.voltage - 3.0) / (4.2 - 3.0)) * 100)) : undefined
       };
-    } catch (error) {
-      console.error(`Error getting device health for ${deviceUID}:`, error);
-      throw error;
+    } catch (err: any) {
+      this._throwFriendly(err, `fetch health for device ${deviceUID}`);
     }
   }
 
-  // Setup webhook for real-time data
-  static async setupWebhook(webhookUrl: string): Promise<void> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
-    try {
-      await notehubApi.post(`/v1/projects/${NOTEHUB_PROJECT_UID}/routes`, {
-        label: 'Water Monitoring Webhook',
-        type: 'http',
-        transform: {
-          // Optional: Transform data before sending to webhook
-          // JSONata expression to modify the payload
-        },
-        http: {
-          url: webhookUrl,
-          http_headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer your-webhook-secret' // Optional security
-          }
-        },
-        filters: {
-          files: ['sensors.qo', '_health.qo', '_track.qo', '_session.qo'],
-          // Optional: Filter by specific devices
-          // device_uids: ['dev:123456789'],
-          // Optional: Only send when certain conditions are met
-          // when: 'body.flow_rate > 0'
-        }
-      });
-    } catch (error) {
-      console.error('Error setting up webhook:', error);
-      throw error;
-    }
-  }
+  /** Helpers **/
 
-  // Get webhook routes for the project
-  static async getWebhookRoutes(): Promise<any[]> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
-    try {
-      const response = await notehubApi.get(`/v1/projects/${NOTEHUB_PROJECT_UID}/routes`);
-      return response.data.routes || [];
-    } catch (error) {
-      console.error('Error fetching webhook routes:', error);
-      throw error;
-    }
-  }
+  private static _throwFriendly(err: any, action: string): never {
+    const status = err?.response?.status;
+    const data = err?.response?.data;
+    console.error(`❌ Failed to ${action}:`, { status, data, err });
 
-  // Delete a webhook route
-  static async deleteWebhookRoute(routeId: string): Promise<void> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-    
-    try {
-      await notehubApi.delete(`/v1/projects/${NOTEHUB_PROJECT_UID}/routes/${routeId}`);
-    } catch (error) {
-      console.error('Error deleting webhook route:', error);
-      throw error;
-    }
-  }
-
-  // Test webhook connectivity
-  static async testWebhook(webhookUrl: string): Promise<boolean> {
-    try {
-      const testPayload = {
-        test: true,
-        timestamp: new Date().toISOString(),
-        message: 'Webhook connectivity test from Notehub service'
-      };
-      
-      const response = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(testPayload)
-      });
-      
-      return response.ok;
-    } catch (error) {
-      console.error('Webhook test failed:', error);
-      return false;
-    }
-  }
-  // Get live data stream for a device (WebSocket-like functionality)
-  static async getLiveDeviceData(deviceUID: string, callback: (data: WaterFlowData) => void): Promise<() => void> {
-    if (!this.isConfigured()) {
-      throw new Error('Notehub is not configured');
-    }
-
-    let isActive = true;
-    
-    const pollForData = async () => {
-      while (isActive) {
-        try {
-          const events = await this.getDeviceEvents(deviceUID, 1);
-          if (events.length > 0) {
-            const event = events[0];
-            if (event.file === 'sensors.qo' && event.body) {
-              const waterFlowData: WaterFlowData = {
-                deviceId: event.device,
-                timestamp: new Date(event.when * 1000).toISOString(),
-                flowRate: event.body.flow_rate || 0,
-                totalVolume: event.body.total_volume || 0,
-                temperature: event.body.temperature,
-                pressure: event.body.pressure,
-                batteryLevel: event.body.battery_level,
-                location: {
-                  lat: event.where_lat,
-                  lon: event.where_lon,
-                  country: event.where_country,
-                  timezone: event.where_timezone
-                }
-              };
-              callback(waterFlowData);
-            }
-          }
-          // Poll every 30 seconds
-          await new Promise(resolve => setTimeout(resolve, 30000));
-        } catch (error) {
-          console.error('Error polling for live data:', error);
-          // Wait before retrying
-          await new Promise(resolve => setTimeout(resolve, 60000));
-        }
+    // 404 from Notehub is often "missing app: prefix" or wrong path
+    if (status === 404) {
+      if (err?.response?.data?.error === 'Notehub credentials not configured') {
+        throw new Error(
+          `Notehub credentials not configured in Supabase Edge Function. Please set NOTEHUB_CLIENT_ID and NOTEHUB_CLIENT_SECRET environment variables.`
+        );
       }
-    };
-
-    // Start polling
-    pollForData();
-
-    // Return cleanup function
-    return () => {
-      isActive = false;
-    };
+      if (err?.config?.baseURL?.includes('notehub-proxy')) {
+        throw new Error(
+          `🚨 Supabase Edge Function "notehub-proxy" not found! Please check that the Edge Function is deployed in Supabase.`
+        );
+      }
+      throw new Error(
+        `Not found when trying to ${action}. Check that VITE_NOTEHUB_PROJECT_UID includes the 'app:' prefix and the path is correct.`
+      );
+    }
+    if (status === 401 || status === 403) {
+      throw new Error(
+        `Unauthorized when trying to ${action}. Check that:\n1. NOTEHUB_CLIENT_ID and NOTEHUB_CLIENT_SECRET are properly configured in the Edge Function\n2. VITE_NOTEHUB_PROJECT_UID (${NOTEHUB_PROJECT_UID}) is correct and accessible by your credentials\n3. Your Notehub client has permissions for this project`
+      );
+    }
+    if (status === 500 && data?.error === 'Notehub credentials not configured') {
+      throw new Error(
+        `Notehub credentials not configured. Please set NOTEHUB_CLIENT_ID and NOTEHUB_CLIENT_SECRET in Supabase Edge Function environment variables.`
+      );
+    }
+    if (status >= 500) {
+      throw new Error(`Notehub server error while trying to ${action}.`);
+    }
+    throw new Error(`Failed to ${action}: ${err?.message || "Unknown error"}`);
   }
 }
 
-// Webhook handler for real-time data updates
-export const handleNotehubWebhook = async (webhookData: any) => {
+/** Optional: webhook handler kept for local processing of inbound payloads.
+ * Your actual ingest path is the Supabase Edge Function `notehub-webhooks`.
+ */
+export const handleNotehubWebhook = async (payload: any) => {
   try {
-    // Process incoming webhook data from Notehub
-    const { event, device, body, when, where_lat, where_lon } = webhookData;
-    
-    if (event === 'sensors.qo' && body) {
-      // This is water flow sensor data
-      const waterFlowData: WaterFlowData = {
-        deviceId: device,
-        timestamp: new Date(when * 1000).toISOString(),
-        flowRate: body.flow_rate || 0,
-        totalVolume: body.total_volume || 0,
-        temperature: body.temperature,
-        pressure: body.pressure,
-        batteryLevel: body.battery_level,
-        location: where_lat && where_lon ? {
-          lat: where_lat,
-          lon: where_lon,
-          country: webhookData.where_country,
-          timezone: webhookData.where_timezone
-        } : undefined
-      };
-
-      // Here you would typically save this data to your database
-      // and potentially trigger real-time updates to connected clients
-      console.log('Received water flow data:', waterFlowData);
-      
-      return waterFlowData;
-    }
-  } catch (error) {
-    console.error('Error processing Notehub webhook:', error);
-    throw error;
+    // transform as needed for your UI
+    return payload;
+  } catch (e) {
+    console.error("Webhook transform error:", e);
+    throw e;
   }
 };
