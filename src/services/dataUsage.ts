@@ -129,16 +129,24 @@ export const getDeviceUsageStats = async (
   endDate: Date
 ): Promise<DeviceUsageStats[]> => {
   try {
-    const deviceUsage = await getDeviceDataUsage(startDate, endDate);
+    const { data: deviceUsage, error } = await supabase
+      .from('device_data_usage')
+      .select('device_id, bytes_received, event_count, created_at')
+      .gte('period_start', startDate.toISOString())
+      .lte('period_end', endDate.toISOString())
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
     const statsMap = new Map<string, DeviceUsageStats>();
 
-    deviceUsage.forEach(usage => {
+    (deviceUsage || []).forEach(usage => {
       const existing = statsMap.get(usage.device_id);
       if (existing) {
         existing.total_bytes += Number(usage.bytes_received);
         existing.total_events += usage.event_count;
-        if (usage.period_end > existing.last_activity) {
-          existing.last_activity = usage.period_end;
+        if (usage.created_at > existing.last_activity) {
+          existing.last_activity = usage.created_at;
         }
       } else {
         statsMap.set(usage.device_id, {
@@ -146,7 +154,7 @@ export const getDeviceUsageStats = async (
           device_name: usage.device_id,
           total_bytes: Number(usage.bytes_received),
           total_events: usage.event_count,
-          last_activity: usage.period_end
+          last_activity: usage.created_at
         });
       }
     });

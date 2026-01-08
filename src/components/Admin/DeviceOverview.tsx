@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Settings, Wifi, WifiOff, Battery, MapPin, AlertTriangle, Activity, Database as DatabaseIcon, Globe, CreditCard as Edit, Trash2, UserPlus } from 'lucide-react';
+import { Search, Plus, Settings, Wifi, WifiOff, Battery, MapPin, AlertTriangle, Activity, Database as DatabaseIcon, Globe, CreditCard as Edit, Trash2, UserPlus, Eye } from 'lucide-react';
 import { DeviceService, TenantService } from '../../services/database';
 import { DeviceFleetAssignmentService } from '../../services/deviceFleetAssignment';
 import { NotehubService } from '../../services/notehub';
+import { supabaseServiceRole } from '../../lib/supabase';
 import type { Database } from '../../lib/supabase';
 import type { NotehubDevice } from '../../services/notehub';
 
@@ -20,10 +21,12 @@ export default function DeviceOverview() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showAssignModal, setShowAssignModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [selectedDevices, setSelectedDevices] = useState<Set<string>>(new Set());
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenantId, setSelectedTenantId] = useState<string>('');
+  const [deviceSettings, setDeviceSettings] = useState<any>(null);
   const [syncStatus, setSyncStatus] = useState({
     lastSync: null as string | null,
     totalDevices: 0,
@@ -39,7 +42,16 @@ export default function DeviceOverview() {
     location: '',
     coordinates: { lat: 0, lon: 0 },
     notehub_device_uid: '',
-    firmware_version: '1.0.0'
+    firmware_version: '1.0.0',
+    flow_sensor_type: '',
+    cloud_sync_publish_interval: 300,
+    cloud_sync_request_interval: 60,
+    flow_calibration_mode: false,
+    flow_publish_interval: 60000,
+    battery_poll_interval: 300000,
+    battery_armed: false,
+    storage_store_interval: 5000,
+    system_main_loop_interval: 1000
   });
 
   useEffect(() => {
@@ -171,13 +183,28 @@ export default function DeviceOverview() {
     if (!selectedDevice) return;
 
     try {
+      // Update the notehub_config with all admin-configurable values
+      const updatedConfig = {
+        ...selectedDevice.notehub_config,
+        'settings.flow.sensor': newDevice.flow_sensor_type,
+        'cloud.sync.publish_interval': newDevice.cloud_sync_publish_interval,
+        'cloud.sync.request_interval': newDevice.cloud_sync_request_interval,
+        'flow_sensor.1.calibration_mode': newDevice.flow_calibration_mode,
+        'flow_sensor.1.publish_interval_ms': newDevice.flow_publish_interval,
+        'battery.poll_interval_ms': newDevice.battery_poll_interval,
+        'settings.battery.armed': newDevice.battery_armed,
+        'storage.ringbuffer.store_interval_ms': newDevice.storage_store_interval,
+        'system.main_loop_interval': newDevice.system_main_loop_interval
+      };
+
       const updates = {
         device_id: newDevice.device_id,
         serial_number: newDevice.serial_number,
         name: newDevice.name,
         location: newDevice.location,
         coordinates: newDevice.coordinates.lat && newDevice.coordinates.lon ? newDevice.coordinates : null,
-        notehub_device_uid: newDevice.notehub_device_uid || null
+        notehub_device_uid: newDevice.notehub_device_uid || null,
+        notehub_config: updatedConfig
       };
 
       await DeviceService.updateDevice(selectedDevice.id, updates);
@@ -206,6 +233,7 @@ export default function DeviceOverview() {
 
   const openEditModal = (device: Device) => {
     setSelectedDevice(device);
+    const config = device.notehub_config || {};
     setNewDevice({
       device_id: device.device_id,
       serial_number: device.serial_number,
@@ -213,9 +241,51 @@ export default function DeviceOverview() {
       location: device.location,
       coordinates: device.coordinates || { lat: 0, lon: 0 },
       notehub_device_uid: device.notehub_device_uid || '',
-      firmware_version: device.firmware_version
+      firmware_version: device.firmware_version,
+      flow_sensor_type: config['settings.flow.sensor'] || '',
+      cloud_sync_publish_interval: config['cloud.sync.publish_interval'] || 300,
+      cloud_sync_request_interval: config['cloud.sync.request_interval'] || 60,
+      flow_calibration_mode: config['flow_sensor.1.calibration_mode'] || false,
+      flow_publish_interval: config['flow_sensor.1.publish_interval_ms'] || 60000,
+      battery_poll_interval: config['battery.poll_interval_ms'] || 300000,
+      battery_armed: config['settings.battery.armed'] || false,
+      storage_store_interval: config['storage.ringbuffer.store_interval_ms'] || 5000,
+      system_main_loop_interval: config['system.main_loop_interval'] || 1000
     });
     setShowEditModal(true);
+  };
+
+  const openSettingsModal = async (device: Device) => {
+    setSelectedDevice(device);
+
+    if (!supabaseServiceRole) return;
+
+    try {
+      const { data: leakSettings } = await supabaseServiceRole
+        .from('leak_detection_settings')
+        .select('*')
+        .eq('tenant_id', device.tenant_id)
+        .maybeSingle();
+
+      const { data: deviceLeakSettings } = await supabaseServiceRole
+        .from('leak_detection_settings')
+        .select('*')
+        .eq('device_id', device.id)
+        .maybeSingle();
+
+      setDeviceSettings({
+        alertConfig: device.alert_config,
+        notehubConfig: device.notehub_config,
+        leakDetection: {
+          global: leakSettings,
+          device: deviceLeakSettings
+        }
+      });
+
+      setShowSettingsModal(true);
+    } catch (error) {
+      console.error('Error loading device settings:', error);
+    }
   };
 
   const handleAssignToTenant = async () => {
@@ -308,22 +378,34 @@ export default function DeviceOverview() {
     setShowAssignModal(true);
   };
 
+  const calculateActualStatus = (device: Device): string => {
+    if (device.status === 'maintenance') return 'maintenance';
+
+    const lastSeen = new Date(device.last_seen);
+    const now = new Date();
+    const hoursSinceActivity = (now.getTime() - lastSeen.getTime()) / (1000 * 60 * 60);
+
+    return hoursSinceActivity < 24 ? 'online' : 'offline';
+  };
+
   // Calculate statistics
   const displayedDevices = devices;
   const totalDevices = devices.length;
-  const onlineDevices = devices.filter(device => device.status === 'online').length;
+  const onlineDevices = devices.filter(device => calculateActualStatus(device) === 'online').length;
 
   // Filter devices based on search and status
   const filteredDevices = devices.filter(device => {
     const matchesSearch = device.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                    device.device_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
                    device.location.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || device.status === statusFilter;
+    const actualStatus = calculateActualStatus(device);
+    const matchesStatus = statusFilter === 'all' || actualStatus === statusFilter;
     return matchesSearch && matchesStatus;
   });
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
+  const getStatusIcon = (device: Device) => {
+    const actualStatus = calculateActualStatus(device);
+    switch (actualStatus) {
       case 'online': return <Wifi className="h-4 w-4 text-green-600" />;
       case 'offline': return <WifiOff className="h-4 w-4 text-red-600" />;
       case 'maintenance': return <Settings className="h-4 w-4 text-yellow-600" />;
@@ -331,8 +413,9 @@ export default function DeviceOverview() {
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
+  const getStatusColor = (device: Device) => {
+    const actualStatus = calculateActualStatus(device);
+    switch (actualStatus) {
       case 'online': return 'bg-green-100 text-green-800';
       case 'offline': return 'bg-red-100 text-red-800';
       case 'maintenance': return 'bg-yellow-100 text-yellow-800';
@@ -630,9 +713,9 @@ export default function DeviceOverview() {
                       </td>
                       <td className="py-4 px-6">
                         <div className="flex items-center space-x-2">
-                          {getStatusIcon(device.status)}
-                          <span className={`px-2 py-1 rounded-full text-sm font-medium ${getStatusColor(device.status)}`}>
-                            {device.status}
+                          {getStatusIcon(device)}
+                          <span className={`px-2 py-1 rounded-full text-sm font-medium ${getStatusColor(device)}`}>
+                            {calculateActualStatus(device)}
                           </span>
                         </div>
                       </td>
@@ -675,6 +758,13 @@ export default function DeviceOverview() {
                               <UserPlus className="h-4 w-4 text-green-600" />
                             </button>
                           )}
+                          <button
+                            onClick={() => openSettingsModal(device)}
+                            className="p-1 rounded hover:bg-gray-100 transition-colors"
+                            title="View Settings"
+                          >
+                            <Eye className="h-4 w-4 text-blue-600" />
+                          </button>
                           <button
                             onClick={() => openEditModal(device)}
                             className="p-1 rounded hover:bg-gray-100 transition-colors"
@@ -772,57 +862,186 @@ export default function DeviceOverview() {
 
       {/* Edit Device Modal */}
       {showEditModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
+          <div className="bg-white rounded-lg p-6 w-full max-w-4xl my-8 max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Edit Device</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Device ID</label>
-                <input
-                  type="text"
-                  value={newDevice.device_id}
-                  onChange={(e) => setNewDevice({...newDevice, device_id: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Serial Number</label>
-                <input
-                  type="text"
-                  value={newDevice.serial_number}
-                  onChange={(e) => setNewDevice({...newDevice, serial_number: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Device Name</label>
-                <input
-                  type="text"
-                  value={newDevice.name}
-                  onChange={(e) => setNewDevice({...newDevice, name: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Location</label>
-                <input
-                  type="text"
-                  value={newDevice.location}
-                  onChange={(e) => setNewDevice({...newDevice, location: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notehub Device UID</label>
-                <input
-                  type="text"
-                  value={newDevice.notehub_device_uid}
-                  onChange={(e) => setNewDevice({...newDevice, notehub_device_uid: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+
+            {/* Basic Information */}
+            <div className="mb-6">
+              <h4 className="text-sm font-semibold text-gray-900 mb-3">Basic Information</h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Device ID</label>
+                  <input
+                    type="text"
+                    value={newDevice.device_id}
+                    onChange={(e) => setNewDevice({...newDevice, device_id: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Serial Number</label>
+                  <input
+                    type="text"
+                    value={newDevice.serial_number}
+                    onChange={(e) => setNewDevice({...newDevice, serial_number: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Device Name</label>
+                  <input
+                    type="text"
+                    value={newDevice.name}
+                    onChange={(e) => setNewDevice({...newDevice, name: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Location</label>
+                  <input
+                    type="text"
+                    value={newDevice.location}
+                    onChange={(e) => setNewDevice({...newDevice, location: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Notehub Device UID</label>
+                  <input
+                    type="text"
+                    value={newDevice.notehub_device_uid}
+                    onChange={(e) => setNewDevice({...newDevice, notehub_device_uid: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
               </div>
             </div>
-            <div className="flex justify-end space-x-3 mt-6">
+
+            {/* Advanced Configuration */}
+            <div className="border-t border-gray-200 pt-6">
+              <h4 className="text-sm font-semibold text-gray-900 mb-3">Advanced Configuration (Admin Only)</h4>
+
+              {/* Flow Sensor Settings */}
+              <div className="mb-4 bg-blue-50 p-4 rounded-lg">
+                <h5 className="text-sm font-medium text-gray-900 mb-3">Flow Sensor</h5>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Flow Sensor Type</label>
+                    <input
+                      type="text"
+                      value={newDevice.flow_sensor_type}
+                      onChange={(e) => setNewDevice({...newDevice, flow_sensor_type: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      placeholder="e.g., YF-S201, FS300A"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Publish Interval (ms)</label>
+                    <input
+                      type="number"
+                      step="1000"
+                      value={newDevice.flow_publish_interval}
+                      onChange={(e) => setNewDevice({...newDevice, flow_publish_interval: parseInt(e.target.value) || 60000})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={newDevice.flow_calibration_mode}
+                        onChange={(e) => setNewDevice({...newDevice, flow_calibration_mode: e.target.checked})}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>Calibration Mode</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cloud Sync Settings */}
+              <div className="mb-4 bg-purple-50 p-4 rounded-lg">
+                <h5 className="text-sm font-medium text-gray-900 mb-3">Cloud Sync</h5>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Publish Interval (s)</label>
+                    <input
+                      type="number"
+                      value={newDevice.cloud_sync_publish_interval}
+                      onChange={(e) => setNewDevice({...newDevice, cloud_sync_publish_interval: parseInt(e.target.value) || 300})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Request Interval (s)</label>
+                    <input
+                      type="number"
+                      value={newDevice.cloud_sync_request_interval}
+                      onChange={(e) => setNewDevice({...newDevice, cloud_sync_request_interval: parseInt(e.target.value) || 60})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Battery Settings */}
+              <div className="mb-4 bg-yellow-50 p-4 rounded-lg">
+                <h5 className="text-sm font-medium text-gray-900 mb-3">Battery</h5>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Poll Interval (ms)</label>
+                    <input
+                      type="number"
+                      step="1000"
+                      value={newDevice.battery_poll_interval}
+                      onChange={(e) => setNewDevice({...newDevice, battery_poll_interval: parseInt(e.target.value) || 300000})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={newDevice.battery_armed}
+                        onChange={(e) => setNewDevice({...newDevice, battery_armed: e.target.checked})}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>Battery Armed</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Storage & System Settings */}
+              <div className="mb-4 bg-gray-50 p-4 rounded-lg">
+                <h5 className="text-sm font-medium text-gray-900 mb-3">Storage & System</h5>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Store Interval (ms)</label>
+                    <input
+                      type="number"
+                      step="1000"
+                      value={newDevice.storage_store_interval}
+                      onChange={(e) => setNewDevice({...newDevice, storage_store_interval: parseInt(e.target.value) || 5000})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Main Loop Interval (ms)</label>
+                    <input
+                      type="number"
+                      step="100"
+                      value={newDevice.system_main_loop_interval}
+                      onChange={(e) => setNewDevice({...newDevice, system_main_loop_interval: parseInt(e.target.value) || 1000})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3 mt-6 border-t border-gray-200 pt-4">
               <button
                 onClick={() => setShowEditModal(false)}
                 className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
@@ -882,6 +1101,285 @@ export default function DeviceOverview() {
                 className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
               >
                 Assign
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSettingsModal && selectedDevice && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Device Settings</h3>
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <span className="text-2xl">&times;</span>
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                <h4 className="text-sm font-semibold text-gray-900 mb-3">Device Information</h4>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-gray-600">Name:</span>
+                    <span className="ml-2 text-gray-900 font-medium">{selectedDevice.name}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Device ID:</span>
+                    <span className="ml-2 text-gray-900 font-medium">{selectedDevice.device_id}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Location:</span>
+                    <span className="ml-2 text-gray-900 font-medium">{selectedDevice.location}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Status:</span>
+                    <span className="ml-2 text-gray-900 font-medium">{selectedDevice.status}</span>
+                  </div>
+                  {selectedDevice.alias && (
+                    <div>
+                      <span className="text-gray-600">Alias:</span>
+                      <span className="ml-2 text-gray-900 font-medium">{selectedDevice.alias}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {deviceSettings?.alertConfig && (
+                <div className="p-4 bg-white border border-gray-200 rounded-lg">
+                  <h4 className="text-sm font-semibold text-gray-900 mb-3">Alert Configuration</h4>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600">Battery Threshold:</span>
+                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.battery_threshold}%</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600">Flow Rate Threshold:</span>
+                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.flow_rate_threshold} L/min</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600">Temperature Min:</span>
+                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.temperature_min}°C</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600">Temperature Max:</span>
+                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.temperature_max}°C</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600">Pressure Min:</span>
+                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.pressure_min} bar</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600">Pressure Max:</span>
+                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.pressure_max} bar</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="p-4 bg-white border border-gray-200 rounded-lg">
+                <h4 className="text-sm font-semibold text-gray-900 mb-3">Leak Detection Settings</h4>
+
+                {deviceSettings?.leakDetection?.global && (
+                  <div className="mb-4">
+                    <p className="text-xs text-gray-600 mb-2 font-medium">Global Settings (Tenant-wide)</p>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Enabled:</span>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${deviceSettings.leakDetection.global.enabled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                          {deviceSettings.leakDetection.global.enabled ? 'Yes' : 'No'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Flow Duration Threshold:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.leakDetection.global.flow_duration_threshold} hours</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Min Flow Rate:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.leakDetection.global.min_flow_rate_threshold} L/min</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {deviceSettings?.leakDetection?.device ? (
+                  <div>
+                    <p className="text-xs text-gray-600 mb-2 font-medium">Device-Specific Override</p>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Enabled:</span>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${deviceSettings.leakDetection.device.enabled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                          {deviceSettings.leakDetection.device.enabled ? 'Yes' : 'No'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Flow Duration Threshold:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.leakDetection.device.flow_duration_threshold} hours</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Min Flow Rate:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.leakDetection.device.min_flow_rate_threshold} L/min</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-500 italic">Using global settings (no device-specific override)</p>
+                )}
+              </div>
+
+              {deviceSettings?.notehubConfig && (
+                <div className="p-4 bg-white border border-gray-200 rounded-lg">
+                  <h4 className="text-sm font-semibold text-gray-900 mb-4">Device Configuration</h4>
+
+                  <div className="mb-4">
+                    <p className="text-xs text-gray-600 mb-2 font-medium uppercase">Flow Sensor</p>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Enabled:</span>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${deviceSettings.notehubConfig['flow_sensor.1.enabled'] ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                          {deviceSettings.notehubConfig['flow_sensor.1.enabled'] ? 'Yes' : 'No'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Max Flow Rate:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['flow_sensor.1.max_flow_rate']} L/min</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Min Flow Rate:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['flow_sensor.1.min_flow_rate']} L/min</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Publish Interval:</span>
+                        <span className="text-gray-900 font-medium">{(deviceSettings.notehubConfig['flow_sensor.1.publish_interval_ms'] / 1000).toFixed(0)}s</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Calibration Mode:</span>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${deviceSettings.notehubConfig['flow_sensor.1.calibration_mode'] ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-800'}`}>
+                          {deviceSettings.notehubConfig['flow_sensor.1.calibration_mode'] ? 'Yes' : 'No'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Scaling Factor:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['flow_sensor.1.scaling_factor']}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <p className="text-xs text-gray-600 mb-2 font-medium uppercase">Battery</p>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Enabled:</span>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${deviceSettings.notehubConfig['battery.enable'] ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                          {deviceSettings.notehubConfig['battery.enable'] ? 'Yes' : 'No'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Poll Interval:</span>
+                        <span className="text-gray-900 font-medium">{(deviceSettings.notehubConfig['battery.poll_interval_ms'] / 1000).toFixed(0)}s</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Min Charge:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['battery.min_charge']}%</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Armed:</span>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${deviceSettings.notehubConfig['settings.battery.armed'] ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                          {deviceSettings.notehubConfig['settings.battery.armed'] ? 'Yes' : 'No'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <p className="text-xs text-gray-600 mb-2 font-medium uppercase">Cloud Sync</p>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Publish Interval:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['cloud.sync.publish_interval']}s</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Request Interval:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['cloud.sync.request_interval']}s</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <p className="text-xs text-gray-600 mb-2 font-medium uppercase">Storage</p>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Store Interval:</span>
+                        <span className="text-gray-900 font-medium">{(deviceSettings.notehubConfig['storage.ringbuffer.store_interval_ms'] / 1000).toFixed(0)}s</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Base Timestamp:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['storage.base.timestamp'] || 'Not set'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <p className="text-xs text-gray-600 mb-2 font-medium uppercase">System</p>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">NFC Enabled:</span>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${deviceSettings.notehubConfig['nfc.enabled'] ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                          {deviceSettings.notehubConfig['nfc.enabled'] ? 'Yes' : 'No'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Main Loop Interval:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['system.main_loop_interval']}ms</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Flow Sensor Type:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['settings.flow.sensor']}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {(deviceSettings.notehubConfig['settings.board.serial'] ||
+                    deviceSettings.notehubConfig['settings.board.uid'] ||
+                    deviceSettings.notehubConfig['settings.notecard.uid']) && (
+                    <div>
+                      <p className="text-xs text-gray-600 mb-2 font-medium uppercase">Hardware Info</p>
+                      <div className="space-y-2 text-sm">
+                        {deviceSettings.notehubConfig['settings.board.serial'] && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-600">Board Serial:</span>
+                            <span className="text-gray-900 font-medium font-mono text-xs">{deviceSettings.notehubConfig['settings.board.serial']}</span>
+                          </div>
+                        )}
+                        {deviceSettings.notehubConfig['settings.board.uid'] && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-600">Board UID:</span>
+                            <span className="text-gray-900 font-medium font-mono text-xs">{deviceSettings.notehubConfig['settings.board.uid']}</span>
+                          </div>
+                        )}
+                        {deviceSettings.notehubConfig['settings.notecard.uid'] && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-600">Notecard UID:</span>
+                            <span className="text-gray-900 font-medium font-mono text-xs">{deviceSettings.notehubConfig['settings.notecard.uid']}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end mt-6">
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+              >
+                Close
               </button>
             </div>
           </div>

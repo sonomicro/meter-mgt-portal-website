@@ -6,6 +6,7 @@ import type { Database } from '../../lib/supabase';
 
 type Device = Database['public']['Tables']['devices']['Row'];
 type DeviceData = Database['public']['Tables']['device_data']['Row'];
+type FleetGroup = Database['public']['Tables']['fleet_groups']['Row'];
 
 interface DailyUsage {
   date: string;
@@ -34,16 +35,28 @@ interface LeakAlert {
   lastSeen: string;
 }
 
+interface LeakDetectionSetting {
+  id: string;
+  tenant_id: string;
+  device_id: string | null;
+  enabled: boolean;
+  flow_duration_threshold: number;
+  min_flow_rate_threshold: number;
+}
+
 export default function WaterUsage() {
   const [selectedPeriod, setSelectedPeriod] = useState('week');
   const [selectedDevice, setSelectedDevice] = useState('all');
   const [showExportModal, setShowExportModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [fleetGroups, setFleetGroups] = useState<FleetGroup[]>([]);
   const [usageData, setUsageData] = useState<DailyUsage[]>([]);
+  const [rawDeviceData, setRawDeviceData] = useState<DeviceData[]>([]);
   const [deviceUsageBreakdown, setDeviceUsageBreakdown] = useState<DeviceUsagePercent[]>([]);
   const [hourlyPatterns, setHourlyPatterns] = useState<HourlyPattern[]>([]);
   const [leakAlerts, setLeakAlerts] = useState<LeakAlert[]>([]);
+  const [leakDetectionSettings, setLeakDetectionSettings] = useState<LeakDetectionSetting[]>([]);
   const [kpiData, setKpiData] = useState({
     peakUsage: 0,
     peakDate: '',
@@ -70,11 +83,9 @@ export default function WaterUsage() {
         return;
       }
 
-      // Load devices
+      // Load devices with computed status
       const { data: userDevices, error: devicesError } = await supabaseServiceRole
-        .from('devices')
-        .select('*')
-        .eq('tenant_id', user.id);
+        .rpc('get_devices_with_status', { filter_tenant_id: user.id });
 
       if (devicesError) {
         console.error('Error fetching devices:', devicesError);
@@ -82,6 +93,22 @@ export default function WaterUsage() {
       }
 
       setDevices(userDevices || []);
+
+      // Load fleet groups
+      const { data: groups } = await supabaseServiceRole
+        .from('fleet_groups')
+        .select('*')
+        .eq('tenant_id', user.id);
+
+      setFleetGroups(groups || []);
+
+      // Load leak detection settings
+      const { data: leakSettings } = await supabaseServiceRole
+        .from('leak_detection_settings')
+        .select('*')
+        .eq('tenant_id', user.id);
+
+      setLeakDetectionSettings(leakSettings || []);
 
       if (!userDevices || userDevices.length === 0) {
         setUsageData([]);
@@ -131,6 +158,9 @@ export default function WaterUsage() {
         console.error('Error fetching device data:', dataError);
         return;
       }
+
+      // Store raw device data for export
+      setRawDeviceData(deviceDataRecords || []);
 
       // Process data into daily usage
       const dailyMap = new Map<string, { usage: number; device: string }>();
@@ -232,9 +262,26 @@ export default function WaterUsage() {
         offlineDevices: offlineCount
       });
 
-      // Detect potential leaks (continuous flow for extended periods)
+      // Detect potential leaks (continuous flow for extended periods) - only if enabled
       const leaks: LeakAlert[] = [];
+
+      // Get global setting (device_id is null) or use default
+      const globalSetting = (leakSettings || []).find(s => s.device_id === null);
+      const defaultThreshold = globalSetting?.flow_duration_threshold || 6;
+      const defaultMinFlowRate = globalSetting?.min_flow_rate_threshold || 1.0;
+      const globalEnabled = globalSetting?.enabled !== false;
+
       for (const device of userDevices) {
+        // Check device-specific settings, fall back to global
+        const deviceSetting = (leakSettings || []).find(s => s.device_id === device.id);
+        const isEnabled = deviceSetting ? deviceSetting.enabled : globalEnabled;
+
+        // Skip if leak detection is disabled for this device
+        if (!isEnabled) continue;
+
+        const threshold = deviceSetting?.flow_duration_threshold || defaultThreshold;
+        const minFlowRate = deviceSetting?.min_flow_rate_threshold || defaultMinFlowRate;
+
         const deviceRecords = (hourlyData || [])
           .filter((r: any) => r.device_id === device.id)
           .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
@@ -244,7 +291,7 @@ export default function WaterUsage() {
 
         for (const record of deviceRecords) {
           const flow = Number(record.flow_rate) || 0;
-          if (flow > 0) {
+          if (flow >= minFlowRate) {
             continuousFlowCount++;
             totalFlow += flow;
           } else {
@@ -252,8 +299,8 @@ export default function WaterUsage() {
             totalFlow = 0;
           }
 
-          // Alert if continuous flow for 6+ hours
-          if (continuousFlowCount >= 6) {
+          // Alert if continuous flow exceeds threshold
+          if (continuousFlowCount >= threshold) {
             const avgFlow = totalFlow / continuousFlowCount;
             leaks.push({
               deviceId: device.id,
@@ -292,18 +339,65 @@ export default function WaterUsage() {
     let content = '';
     let filename = '';
 
+    // Filter raw data by selected device
+    const exportData = selectedDevice === 'all'
+      ? rawDeviceData
+      : rawDeviceData.filter(d => d.device_id === selectedDevice);
+
+    // Map device IDs to names for export
+    const dataWithNames = exportData.map(record => {
+      const device = devices.find(d => d.id === record.device_id);
+      const fleetGroup = device?.fleet_group_id
+        ? fleetGroups.find(g => g.id === device.fleet_group_id)
+        : null;
+      return {
+        timestamp: record.timestamp,
+        device_name: device?.name || 'Unknown',
+        device_alias: device?.alias || '',
+        fleet_group: fleetGroup?.name || '',
+        device_id: record.device_id,
+        flow_rate: record.flow_rate,
+        total_volume: record.total_volume,
+        temperature: record.temperature,
+        pressure: record.pressure,
+        battery_voltage: record.battery_voltage,
+        signal_strength: record.signal_strength
+      };
+    });
+
     if (format === 'csv') {
-      content = 'Date,Usage (L)\n' +
-                filteredData.map(d => `${d.date},${d.usage}`).join('\n');
-      filename = 'water-usage.csv';
+      content = 'Timestamp,Device Name,Alias,Fleet Group,Device ID,Flow Rate (L/min),Total Volume (L),Temperature (°C),Pressure (bar),Battery Voltage (V),Signal Strength\n' +
+                dataWithNames.map(d =>
+                  `${d.timestamp},${d.device_name},${d.device_alias},${d.fleet_group},${d.device_id},${d.flow_rate || 0},${d.total_volume || 0},${d.temperature || ''},${d.pressure || ''},${d.battery_voltage || ''},${d.signal_strength || ''}`
+                ).join('\n');
+      filename = `water-usage-full-resolution-${new Date().toISOString().split('T')[0]}.csv`;
     } else if (format === 'json') {
-      content = JSON.stringify(filteredData, null, 2);
-      filename = 'water-usage.json';
+      content = JSON.stringify(dataWithNames, null, 2);
+      filename = `water-usage-full-resolution-${new Date().toISOString().split('T')[0]}.json`;
     } else {
       const deviceName = devices.find(d => d.id === selectedDevice)?.name || 'All Devices';
-      content = `Water Usage Report\n\nPeriod: ${selectedPeriod}\nDevice: ${deviceName}\n\nTotal Usage: ${totalUsage.toFixed(1)}L\nDaily Average: ${avgDaily.toFixed(1)}L\n\nDaily Breakdown:\n` +
-                filteredData.map(d => `${d.date}: ${d.usage.toFixed(1)}L`).join('\n');
-      filename = 'water-usage-report.txt';
+      content = `WATER USAGE REPORT - FULL RESOLUTION DATA\n\n` +
+                `Generated: ${new Date().toLocaleString()}\n` +
+                `Period: ${selectedPeriod}\n` +
+                `Device: ${deviceName}\n` +
+                `Total Records: ${dataWithNames.length}\n\n` +
+                `Total Usage: ${totalUsage.toFixed(1)}L\n` +
+                `Daily Average: ${avgDaily.toFixed(1)}L\n\n` +
+                `DETAILED DATA (Full Resolution):\n` +
+                `${'='.repeat(80)}\n\n` +
+                dataWithNames.map(d =>
+                  `${d.timestamp}\n` +
+                  `  Device: ${d.device_name}\n` +
+                  (d.device_alias ? `  Alias: ${d.device_alias}\n` : '') +
+                  (d.fleet_group ? `  Fleet Group: ${d.fleet_group}\n` : '') +
+                  `  Flow Rate: ${(d.flow_rate || 0).toFixed(2)} L/min\n` +
+                  `  Total Volume: ${(d.total_volume || 0).toFixed(2)} L\n` +
+                  `  Temperature: ${d.temperature ? d.temperature.toFixed(1) + ' °C' : 'N/A'}\n` +
+                  `  Pressure: ${d.pressure ? d.pressure.toFixed(2) + ' bar' : 'N/A'}\n` +
+                  `  Battery: ${d.battery_voltage ? d.battery_voltage.toFixed(2) + ' V' : 'N/A'}\n` +
+                  `  Signal: ${d.signal_strength || 'N/A'}\n`
+                ).join('\n');
+      filename = `water-usage-report-${new Date().toISOString().split('T')[0]}.txt`;
     }
 
     const blob = new Blob([content], { type: 'text/plain' });
@@ -318,13 +412,40 @@ export default function WaterUsage() {
 
   const generateReport = () => {
     const deviceName = devices.find(d => d.id === selectedDevice)?.name || 'All Devices';
+
+    // Filter raw data by selected device
+    const exportData = selectedDevice === 'all'
+      ? rawDeviceData
+      : rawDeviceData.filter(d => d.device_id === selectedDevice);
+
+    // Map device IDs to names for report
+    const dataWithNames = exportData.map(record => {
+      const device = devices.find(d => d.id === record.device_id);
+      const fleetGroup = device?.fleet_group_id
+        ? fleetGroups.find(g => g.id === device.fleet_group_id)
+        : null;
+      return {
+        timestamp: record.timestamp,
+        device_name: device?.name || 'Unknown',
+        device_alias: device?.alias || '',
+        fleet_group: fleetGroup?.name || '',
+        flow_rate: record.flow_rate,
+        total_volume: record.total_volume,
+        temperature: record.temperature,
+        pressure: record.pressure,
+        battery_voltage: record.battery_voltage,
+        signal_strength: record.signal_strength
+      };
+    });
+
     const reportData = {
       period: selectedPeriod,
       device: deviceName,
       summary: {
         totalUsage,
         avgDaily,
-        trend: trend ? 'increasing' : 'decreasing'
+        trend: trend ? 'increasing' : 'decreasing',
+        totalRecords: dataWithNames.length
       },
       data: filteredData
     };
@@ -332,19 +453,34 @@ export default function WaterUsage() {
     const content = `WATER USAGE ANALYSIS REPORT\n\n` +
                    `Generated: ${new Date().toLocaleString()}\n` +
                    `Period: ${selectedPeriod}\n` +
-                   `Device: ${reportData.device}\n\n` +
+                   `Device: ${reportData.device}\n` +
+                   `Total Data Points: ${reportData.summary.totalRecords}\n\n` +
                    `SUMMARY\n` +
+                   `${'='.repeat(80)}\n` +
                    `Total Usage: ${totalUsage.toFixed(1)}L\n` +
                    `Daily Average: ${avgDaily.toFixed(1)}L\n` +
-                   `Trend: ${reportData.summary.trend}\n\n` +
-                   `DETAILED DATA\n` +
-                   filteredData.map(d => `${d.date}: ${d.usage.toFixed(1)}L`).join('\n');
+                   `Trend: ${reportData.summary.trend}\n` +
+                   `Peak Usage: ${kpiData.peakUsage.toFixed(1)}L on ${kpiData.peakDate}\n\n` +
+                   `DAILY SUMMARY\n` +
+                   `${'='.repeat(80)}\n` +
+                   filteredData.map(d => `${d.date}: ${d.usage.toFixed(1)}L`).join('\n') +
+                   `\n\n` +
+                   `FULL RESOLUTION DATA (First 100 records)\n` +
+                   `${'='.repeat(80)}\n\n` +
+                   dataWithNames.slice(0, 100).map(d =>
+                     `${d.timestamp} | ${d.device_name}\n` +
+                     `  Flow: ${(d.flow_rate || 0).toFixed(2)} L/min | ` +
+                     `Volume: ${(d.total_volume || 0).toFixed(2)} L | ` +
+                     `Temp: ${d.temperature ? d.temperature.toFixed(1) + '°C' : 'N/A'} | ` +
+                     `Pressure: ${d.pressure ? d.pressure.toFixed(2) + ' bar' : 'N/A'}\n`
+                   ).join('\n') +
+                   (dataWithNames.length > 100 ? `\n\n... and ${dataWithNames.length - 100} more records. Use Export function for complete data.\n` : '');
 
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'water-usage-analysis.txt';
+    a.download = `water-usage-analysis-${new Date().toISOString().split('T')[0]}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -681,25 +817,36 @@ export default function WaterUsage() {
       {showExportModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Export Usage Data</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Export Full Resolution Data</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Export all data points with timestamps at device reporting intervals. Includes flow rate, temperature, pressure, battery, and signal strength for the selected period.
+            </p>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+              <p className="text-sm text-blue-800">
+                <strong>{rawDeviceData.length}</strong> data points available for export
+              </p>
+            </div>
             <div className="space-y-3">
               <button
                 onClick={() => handleExport('csv')}
-                className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors text-left"
+                className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors text-left flex items-center justify-between"
               >
-                Export as CSV
+                <span>Export as CSV</span>
+                <span className="text-xs opacity-75">Spreadsheet format</span>
               </button>
               <button
                 onClick={() => handleExport('json')}
-                className="w-full bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors text-left"
+                className="w-full bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors text-left flex items-center justify-between"
               >
-                Export as JSON
+                <span>Export as JSON</span>
+                <span className="text-xs opacity-75">Machine-readable format</span>
               </button>
               <button
                 onClick={() => handleExport('pdf')}
-                className="w-full bg-gray-600 text-white py-2 px-4 rounded-lg hover:bg-gray-700 transition-colors text-left"
+                className="w-full bg-gray-600 text-white py-2 px-4 rounded-lg hover:bg-gray-700 transition-colors text-left flex items-center justify-between"
               >
-                Export as Report
+                <span>Export as Text Report</span>
+                <span className="text-xs opacity-75">Detailed report format</span>
               </button>
             </div>
             <div className="flex justify-end space-x-3 mt-6">

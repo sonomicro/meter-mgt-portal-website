@@ -66,13 +66,26 @@ export default function FleetManagement({ user }: FleetManagementProps) {
   });
 
   const [advancedSettings, setAdvancedSettings] = useState({
-    flow_rate_min: 0,
-    flow_rate_max: 100,
-    battery_threshold: 25,
-    temperature_min: 0,
-    temperature_max: 50,
-    pressure_min: 0,
-    pressure_max: 10
+    'flow_sensor.1.enabled': true,
+    'flow_sensor.1.max_flow_rate': 100.0,
+    'flow_sensor.1.min_flow_rate': 0.0,
+    'flow_sensor.1.calibration_mode': false,
+    'flow_sensor.1.scaling_factor': 1.0,
+    'flow_sensor.1.publish_interval_ms': 60000,
+    'storage.ringbuffer.store_interval_ms': 5000,
+    'storage.base.timestamp': 0,
+    'nfc.enabled': false,
+    'battery.enable': true,
+    'battery.poll_interval_ms': 300000,
+    'battery.min_charge': 20,
+    'cloud.sync.publish_interval': 300,
+    'cloud.sync.request_interval': 60,
+    'system.main_loop_interval': 1000,
+    'settings.board.serial': '',
+    'settings.board.uid': '',
+    'settings.flow.sensor': 'FS3000',
+    'settings.notecard.uid': '',
+    'settings.battery.armed': true
   });
 
   useEffect(() => {
@@ -380,15 +393,28 @@ export default function FleetManagement({ user }: FleetManagementProps) {
 
   const openAdvancedModal = (device: Device) => {
     setSelectedDevice(device);
-    const config = device.alert_config || {};
+    const config = (device as any).notehub_config || {};
     setAdvancedSettings({
-      flow_rate_min: config.flow_rate_min || 0,
-      flow_rate_max: config.flow_rate_max || 100,
-      battery_threshold: config.battery_threshold || 25,
-      temperature_min: config.temperature_min || 0,
-      temperature_max: config.temperature_max || 50,
-      pressure_min: config.pressure_min || 0,
-      pressure_max: config.pressure_max || 10
+      'flow_sensor.1.enabled': config['flow_sensor.1.enabled'] !== undefined ? config['flow_sensor.1.enabled'] : true,
+      'flow_sensor.1.max_flow_rate': config['flow_sensor.1.max_flow_rate'] || 100.0,
+      'flow_sensor.1.min_flow_rate': config['flow_sensor.1.min_flow_rate'] || 0.0,
+      'flow_sensor.1.calibration_mode': config['flow_sensor.1.calibration_mode'] || false,
+      'flow_sensor.1.scaling_factor': config['flow_sensor.1.scaling_factor'] || 1.0,
+      'flow_sensor.1.publish_interval_ms': config['flow_sensor.1.publish_interval_ms'] || 60000,
+      'storage.ringbuffer.store_interval_ms': config['storage.ringbuffer.store_interval_ms'] || 5000,
+      'storage.base.timestamp': config['storage.base.timestamp'] || 0,
+      'nfc.enabled': config['nfc.enabled'] || false,
+      'battery.enable': config['battery.enable'] !== undefined ? config['battery.enable'] : true,
+      'battery.poll_interval_ms': config['battery.poll_interval_ms'] || 300000,
+      'battery.min_charge': config['battery.min_charge'] || 20,
+      'cloud.sync.publish_interval': config['cloud.sync.publish_interval'] || 300,
+      'cloud.sync.request_interval': config['cloud.sync.request_interval'] || 60,
+      'system.main_loop_interval': config['system.main_loop_interval'] || 1000,
+      'settings.board.serial': config['settings.board.serial'] || '',
+      'settings.board.uid': config['settings.board.uid'] || '',
+      'settings.flow.sensor': config['settings.flow.sensor'] || 'FS3000',
+      'settings.notecard.uid': config['settings.notecard.uid'] || '',
+      'settings.battery.armed': config['settings.battery.armed'] !== undefined ? config['settings.battery.armed'] : true
     });
     setShowAdvancedModal(true);
   };
@@ -397,22 +423,25 @@ export default function FleetManagement({ user }: FleetManagementProps) {
     if (!selectedDevice) return;
 
     try {
-      // Update local database with alert config
+      // Update local database with notehub config
       await DeviceService.updateDevice(selectedDevice.id, {
-        alert_config: advancedSettings
+        notehub_config: advancedSettings
       }, true);
 
       // Send environment variables to Notehub via device command
       if (selectedDevice.notehub_device_uid) {
-        const environmentVariables = {
-          _max_flow_rate: advancedSettings.flow_rate_max.toString(),
-          _min_flow_rate: advancedSettings.flow_rate_min.toString(),
-          _min_battery_power: advancedSettings.battery_threshold.toString(),
-          _min_external_temp: advancedSettings.temperature_min.toString(),
-          _max_external_temp: advancedSettings.temperature_max.toString(),
-          _min_external_pressure: advancedSettings.pressure_min.toString(),
-          _max_external_pressure: advancedSettings.pressure_max.toString()
-        };
+        const environmentVariables: Record<string, string> = {};
+
+        // Convert all settings to string format for Notehub
+        Object.entries(advancedSettings).forEach(([key, value]) => {
+          if (typeof value === 'boolean') {
+            environmentVariables[key] = value ? 'true' : 'false';
+          } else if (typeof value === 'number') {
+            environmentVariables[key] = value.toString();
+          } else {
+            environmentVariables[key] = value as string;
+          }
+        });
 
         // Create device command to sync env vars to Notehub
         await DeviceService.updateDeviceEnvironmentVariables(
@@ -1045,127 +1074,275 @@ export default function FleetManagement({ user }: FleetManagementProps) {
       {/* Advanced Settings Modal */}
       {showAdvancedModal && selectedDevice && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-2xl">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Advanced Device Settings</h3>
+          <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Notehub Device Configuration</h3>
             <p className="text-sm text-gray-600 mb-6">
-              Configure alert thresholds and monitoring parameters for <strong>{selectedDevice.alias || selectedDevice.name}</strong>
+              Configure Notehub environment variables for <strong>{selectedDevice.alias || selectedDevice.name}</strong>. Changes will be synced to the device.
             </p>
 
             <div className="space-y-6">
-              {/* Flow Rate Settings */}
+              {/* Flow Sensor Settings */}
               <div className="bg-blue-50 p-4 rounded-lg">
                 <h4 className="font-medium text-gray-900 mb-3 flex items-center">
                   <Activity className="h-5 w-5 text-blue-600 mr-2" />
-                  Flow Rate Thresholds
+                  Flow Sensor Configuration
                 </h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Minimum Flow Rate (L/min)</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={advancedSettings.flow_rate_min}
-                      onChange={(e) => setAdvancedSettings({...advancedSettings, flow_rate_min: parseFloat(e.target.value) || 0})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">Alert if flow rate drops below this value</p>
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 mb-2">
+                      <input
+                        type="checkbox"
+                        checked={advancedSettings['flow_sensor.1.enabled']}
+                        onChange={(e) => setAdvancedSettings({...advancedSettings, 'flow_sensor.1.enabled': e.target.checked})}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>Enable Flow Sensor</span>
+                    </label>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Maximum Flow Rate (L/min)</label>
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 mb-2">
+                      <input
+                        type="checkbox"
+                        checked={advancedSettings['flow_sensor.1.calibration_mode']}
+                        disabled
+                        className="rounded border-gray-300 text-gray-400 bg-gray-100 cursor-not-allowed"
+                      />
+                      <span className="text-gray-500">Calibration Mode (Admin Only)</span>
+                    </label>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Min Flow Rate (L/min)</label>
                     <input
                       type="number"
                       step="0.1"
-                      value={advancedSettings.flow_rate_max}
-                      onChange={(e) => setAdvancedSettings({...advancedSettings, flow_rate_max: parseFloat(e.target.value) || 100})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      value={advancedSettings['flow_sensor.1.min_flow_rate']}
+                      onChange={(e) => setAdvancedSettings({...advancedSettings, 'flow_sensor.1.min_flow_rate': parseFloat(e.target.value) || 0})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                     />
-                    <p className="text-xs text-gray-500 mt-1">Alert if flow rate exceeds this value (leak detection)</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Max Flow Rate (L/min)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={advancedSettings['flow_sensor.1.max_flow_rate']}
+                      onChange={(e) => setAdvancedSettings({...advancedSettings, 'flow_sensor.1.max_flow_rate': parseFloat(e.target.value) || 100})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Scaling Factor</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={advancedSettings['flow_sensor.1.scaling_factor']}
+                      onChange={(e) => setAdvancedSettings({...advancedSettings, 'flow_sensor.1.scaling_factor': parseFloat(e.target.value) || 1.0})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Publish Interval (ms) (Admin Only)</label>
+                    <input
+                      type="number"
+                      step="1000"
+                      value={advancedSettings['flow_sensor.1.publish_interval_ms']}
+                      disabled
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
+                    />
                   </div>
                 </div>
               </div>
 
-              {/* Battery Threshold */}
+              {/* Battery Settings */}
               <div className="bg-yellow-50 p-4 rounded-lg">
                 <h4 className="font-medium text-gray-900 mb-3 flex items-center">
                   <Battery className="h-5 w-5 text-yellow-600 mr-2" />
-                  Battery Threshold
-                </h4>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Low Battery Alert (%)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={advancedSettings.battery_threshold}
-                    onChange={(e) => setAdvancedSettings({...advancedSettings, battery_threshold: parseInt(e.target.value) || 25})}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Alert when battery level drops below this percentage</p>
-                </div>
-              </div>
-
-              {/* Temperature Thresholds */}
-              <div className="bg-red-50 p-4 rounded-lg">
-                <h4 className="font-medium text-gray-900 mb-3 flex items-center">
-                  <AlertTriangle className="h-5 w-5 text-red-600 mr-2" />
-                  Temperature Thresholds (°C)
+                  Battery Configuration
                 </h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Minimum Temperature</label>
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 mb-2">
+                      <input
+                        type="checkbox"
+                        checked={advancedSettings['battery.enable']}
+                        onChange={(e) => setAdvancedSettings({...advancedSettings, 'battery.enable': e.target.checked})}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>Enable Battery Monitoring</span>
+                    </label>
+                  </div>
+                  <div>
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 mb-2">
+                      <input
+                        type="checkbox"
+                        checked={advancedSettings['settings.battery.armed']}
+                        disabled
+                        className="rounded border-gray-300 text-gray-400 bg-gray-100 cursor-not-allowed"
+                      />
+                      <span className="text-gray-500">Battery Armed (Admin Only)</span>
+                    </label>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Min Charge (%)</label>
                     <input
                       type="number"
-                      step="0.1"
-                      value={advancedSettings.temperature_min}
-                      onChange={(e) => setAdvancedSettings({...advancedSettings, temperature_min: parseFloat(e.target.value) || 0})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      min="0"
+                      max="100"
+                      value={advancedSettings['battery.min_charge']}
+                      onChange={(e) => setAdvancedSettings({...advancedSettings, 'battery.min_charge': parseInt(e.target.value) || 20})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Maximum Temperature</label>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Poll Interval (ms) (Admin Only)</label>
                     <input
                       type="number"
-                      step="0.1"
-                      value={advancedSettings.temperature_max}
-                      onChange={(e) => setAdvancedSettings({...advancedSettings, temperature_max: parseFloat(e.target.value) || 50})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      step="1000"
+                      value={advancedSettings['battery.poll_interval_ms']}
+                      disabled
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Pressure Thresholds */}
+              {/* Storage Settings */}
               <div className="bg-green-50 p-4 rounded-lg">
                 <h4 className="font-medium text-gray-900 mb-3 flex items-center">
-                  <Activity className="h-5 w-5 text-green-600 mr-2" />
-                  Pressure Thresholds (bar)
+                  <Settings className="h-5 w-5 text-green-600 mr-2" />
+                  Storage Configuration
                 </h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Minimum Pressure</label>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Store Interval (ms) (Admin Only)</label>
                     <input
                       type="number"
-                      step="0.1"
-                      value={advancedSettings.pressure_min}
-                      onChange={(e) => setAdvancedSettings({...advancedSettings, pressure_min: parseFloat(e.target.value) || 0})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      step="1000"
+                      value={advancedSettings['storage.ringbuffer.store_interval_ms']}
+                      disabled
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">How often to store data in ring buffer</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Base Timestamp</label>
+                    <input
+                      type="number"
+                      value={advancedSettings['storage.base.timestamp']}
+                      onChange={(e) => setAdvancedSettings({...advancedSettings, 'storage.base.timestamp': parseInt(e.target.value) || 0})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Base timestamp for data storage</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cloud Sync Settings */}
+              <div className="bg-purple-50 p-4 rounded-lg">
+                <h4 className="font-medium text-gray-900 mb-3 flex items-center">
+                  <Globe className="h-5 w-5 text-purple-600 mr-2" />
+                  Cloud Sync Configuration
+                </h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Publish Interval (s) (Admin Only)</label>
+                    <input
+                      type="number"
+                      value={advancedSettings['cloud.sync.publish_interval']}
+                      disabled
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">How often to publish data to cloud</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Request Interval (s) (Admin Only)</label>
+                    <input
+                      type="number"
+                      value={advancedSettings['cloud.sync.request_interval']}
+                      disabled
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">How often to request from cloud</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* System Settings */}
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <h4 className="font-medium text-gray-900 mb-3 flex items-center">
+                  <Clock className="h-5 w-5 text-gray-600 mr-2" />
+                  System Configuration
+                </h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Main Loop Interval (ms) (Admin Only)</label>
+                    <input
+                      type="number"
+                      step="100"
+                      value={advancedSettings['system.main_loop_interval']}
+                      disabled
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Maximum Pressure</label>
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 mb-2">
+                      <input
+                        type="checkbox"
+                        checked={advancedSettings['nfc.enabled']}
+                        onChange={(e) => setAdvancedSettings({...advancedSettings, 'nfc.enabled': e.target.checked})}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>Enable NFC</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Device Settings (Read-only) */}
+              <div className="bg-slate-50 p-4 rounded-lg">
+                <h4 className="font-medium text-gray-900 mb-3">Device Information (Read-only)</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Board Serial</label>
                     <input
-                      type="number"
-                      step="0.1"
-                      value={advancedSettings.pressure_max}
-                      onChange={(e) => setAdvancedSettings({...advancedSettings, pressure_max: parseFloat(e.target.value) || 10})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      type="text"
+                      value={advancedSettings['settings.board.serial']}
+                      disabled
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Board UID</label>
+                    <input
+                      type="text"
+                      value={advancedSettings['settings.board.uid']}
+                      disabled
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Flow Sensor Type</label>
+                    <input
+                      type="text"
+                      value={advancedSettings['settings.flow.sensor']}
+                      disabled
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Notecard UID</label>
+                    <input
+                      type="text"
+                      value={advancedSettings['settings.notecard.uid']}
+                      disabled
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600"
                     />
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="flex justify-end space-x-3 mt-6">
+            <div className="flex justify-end space-x-3 mt-6 border-t border-gray-200 pt-4">
               <button
                 onClick={() => setShowAdvancedModal(false)}
                 className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
@@ -1177,7 +1354,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                 className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2"
               >
                 <Save className="h-4 w-4" />
-                <span>Save Settings</span>
+                <span>Save & Sync to Device</span>
               </button>
             </div>
           </div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Droplets, Wifi, AlertTriangle, Battery } from 'lucide-react';
-import { supabaseServiceRole } from '../../lib/supabase';
+import { DeviceService } from '../../services/database';
 import { getCurrentUser } from '../../services/auth';
 import type { Database } from '../../lib/supabase';
 
@@ -28,20 +28,8 @@ export default function TenantDashboard() {
       console.log('Current tenant user:', user);
       setCurrentUserId(user.id);
 
-      if (!supabaseServiceRole) {
-        console.error('Service role client not available');
-        return;
-      }
-
-      const { data: userDevices, error } = await supabaseServiceRole
-        .from('devices')
-        .select('*')
-        .eq('tenant_id', user.id);
-
-      if (error) {
-        console.error('Error fetching devices:', error);
-        return;
-      }
+      // Use DeviceService to get devices with computed status
+      const userDevices = await DeviceService.getDevices();
 
       console.log('Loaded devices for tenant:', userDevices);
       setDevices(userDevices || []);

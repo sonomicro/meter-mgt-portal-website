@@ -414,23 +414,22 @@ export class DeviceService {
       }
       
       console.log('Current authenticated user:', currentUser.id, currentUser.email);
-      let query = supabase
-        .from('devices')
-        .select('*')
-        .order('created_at', { ascending: false });
 
-      // Filter by the authenticated user's ID for tenants, or use provided tenantId for admins
+      // Determine tenant filter
+      let filterTenantId = null;
       if (currentUser.role === 'tenant') {
         console.log('Filtering by tenant_id (current user id):', currentUser.id);
-        query = query.eq('tenant_id', currentUser.id);
+        filterTenantId = currentUser.id;
       } else if (tenantId) {
         console.log('Filtering by provided tenant_id:', tenantId);
-        query = query.eq('tenant_id', tenantId);
+        filterTenantId = tenantId;
       }
-      // If admin and no tenantId provided, return all devices
 
-      const { data, error } = await query;
-      
+      // Use database function to get devices with computed status
+      const { data, error } = await supabase.rpc('get_devices_with_status', {
+        filter_tenant_id: filterTenantId
+      });
+
       if (error) {
         console.error('Supabase error fetching devices:', error);
         console.error('Error details:', {
@@ -441,9 +440,8 @@ export class DeviceService {
         });
         throw new Error(`Failed to fetch devices: ${error.message}`);
       }
-      
-      console.log('Raw query result:', data);
-      console.log('Successfully fetched devices:', data?.length || 0);
+
+      console.log('Successfully fetched devices with computed status:', data?.length || 0);
       return data || [];
     } catch (error) {
       console.error('Error in getDevices:', error);

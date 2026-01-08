@@ -1,5 +1,11 @@
-import React, { useState } from 'react';
-import { Save, User, Bell, Shield, Key, Mail, Phone, Building } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Save, User, Bell, Shield, Key, Mail, Phone, Building, Settings, AlertTriangle } from 'lucide-react';
+import { supabaseServiceRole } from '../../lib/supabase';
+import { getCurrentUser } from '../../services/auth';
+import type { Database } from '../../lib/supabase';
+
+type Device = Database['public']['Tables']['devices']['Row'];
+type LeakDetectionSetting = Database['public']['Tables']['leak_detection_settings']['Row'];
 
 export default function TenantSettings() {
   const [activeTab, setActiveTab] = useState('profile');
@@ -22,6 +28,49 @@ export default function TenantSettings() {
     confirmPassword: ''
   });
 
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [leakDetectionSettings, setLeakDetectionSettings] = useState<LeakDetectionSetting[]>([]);
+  const [globalLeakDetection, setGlobalLeakDetection] = useState({
+    enabled: true,
+    flowDurationThreshold: 6,
+    minFlowRateThreshold: 1.0
+  });
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    loadDevicesAndSettings();
+  }, []);
+
+  const loadDevicesAndSettings = async () => {
+    try {
+      const user = await getCurrentUser();
+      if (!user || user.role !== 'tenant' || !supabaseServiceRole) return;
+
+      const { data: userDevices } = await supabaseServiceRole
+        .rpc('get_devices_with_status', { filter_tenant_id: user.id });
+
+      setDevices(userDevices || []);
+
+      const { data: leakSettings } = await supabaseServiceRole
+        .from('leak_detection_settings')
+        .select('*')
+        .eq('tenant_id', user.id);
+
+      setLeakDetectionSettings(leakSettings || []);
+
+      const globalSetting = leakSettings?.find(s => s.device_id === null);
+      if (globalSetting) {
+        setGlobalLeakDetection({
+          enabled: globalSetting.enabled,
+          flowDurationThreshold: globalSetting.flow_duration_threshold,
+          minFlowRateThreshold: Number(globalSetting.min_flow_rate_threshold)
+        });
+      }
+    } catch (error) {
+      console.error('Error loading devices and settings:', error);
+    }
+  };
+
   const handleSettingChange = (key: string, value: any) => {
     setSettings(prev => ({ ...prev, [key]: value }));
   };
@@ -31,6 +80,7 @@ export default function TenantSettings() {
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'security', label: 'Security', icon: Shield },
     { id: 'company', label: 'Company Info', icon: Building },
+    { id: 'advanced', label: 'Advanced', icon: Settings },
   ];
 
   const renderProfileSettings = () => (
@@ -249,7 +299,7 @@ export default function TenantSettings() {
           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
       </div>
-      
+
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-2">Address</label>
         <input
@@ -259,7 +309,7 @@ export default function TenantSettings() {
           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
       </div>
-      
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">City</label>
@@ -289,7 +339,7 @@ export default function TenantSettings() {
           />
         </div>
       </div>
-      
+
       <div className="p-4 bg-blue-50 rounded-lg">
         <h4 className="text-sm font-medium text-blue-900 mb-2">Account Information</h4>
         <div className="grid grid-cols-2 gap-4 text-sm">
@@ -314,12 +364,191 @@ export default function TenantSettings() {
     </div>
   );
 
+  const toggleDeviceLeakDetection = async (deviceId: string, enabled: boolean) => {
+    try {
+      const user = await getCurrentUser();
+      if (!user || !supabaseServiceRole) return;
+
+      const existingSetting = leakDetectionSettings.find(s => s.device_id === deviceId);
+
+      if (existingSetting) {
+        await supabaseServiceRole
+          .from('leak_detection_settings')
+          .update({ enabled })
+          .eq('id', existingSetting.id);
+      } else {
+        await supabaseServiceRole
+          .from('leak_detection_settings')
+          .insert({
+            tenant_id: user.id,
+            device_id: deviceId,
+            enabled,
+            flow_duration_threshold: globalLeakDetection.flowDurationThreshold,
+            min_flow_rate_threshold: globalLeakDetection.minFlowRateThreshold
+          });
+      }
+
+      await loadDevicesAndSettings();
+    } catch (error) {
+      console.error('Error updating device leak detection:', error);
+    }
+  };
+
+  const saveGlobalLeakDetection = async () => {
+    try {
+      setLoading(true);
+      const user = await getCurrentUser();
+      if (!user || !supabaseServiceRole) return;
+
+      const globalSetting = leakDetectionSettings.find(s => s.device_id === null);
+
+      if (globalSetting) {
+        await supabaseServiceRole
+          .from('leak_detection_settings')
+          .update({
+            enabled: globalLeakDetection.enabled,
+            flow_duration_threshold: globalLeakDetection.flowDurationThreshold,
+            min_flow_rate_threshold: globalLeakDetection.minFlowRateThreshold
+          })
+          .eq('id', globalSetting.id);
+      } else {
+        await supabaseServiceRole
+          .from('leak_detection_settings')
+          .insert({
+            tenant_id: user.id,
+            device_id: null,
+            enabled: globalLeakDetection.enabled,
+            flow_duration_threshold: globalLeakDetection.flowDurationThreshold,
+            min_flow_rate_threshold: globalLeakDetection.minFlowRateThreshold
+          });
+      }
+
+      await loadDevicesAndSettings();
+      alert('Leak detection settings saved successfully!');
+    } catch (error) {
+      console.error('Error saving global leak detection:', error);
+      alert('Failed to save settings');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const renderAdvancedSettings = () => (
+    <div className="space-y-6">
+      <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+        <div className="flex items-center space-x-2 mb-2">
+          <AlertTriangle className="h-5 w-5 text-amber-600" />
+          <h3 className="text-lg font-semibold text-amber-900">Leak Detection Settings</h3>
+        </div>
+        <p className="text-sm text-amber-700">
+          Configure how the system detects potential water leaks. These settings help prevent false alarms in industrial environments with continuous water flow.
+        </p>
+      </div>
+
+      <div className="p-6 bg-white border border-gray-200 rounded-lg">
+        <h4 className="text-sm font-medium text-gray-900 mb-4">Global Settings</h4>
+        <p className="text-sm text-gray-600 mb-4">These settings apply to all devices unless overridden individually.</p>
+
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-700">Enable Leak Detection</p>
+              <p className="text-sm text-gray-500">Turn on automatic leak detection for all devices</p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={globalLeakDetection.enabled}
+                onChange={(e) => setGlobalLeakDetection(prev => ({ ...prev, enabled: e.target.checked }))}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+            </label>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Flow Duration Threshold (hours)
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="168"
+              value={globalLeakDetection.flowDurationThreshold}
+              onChange={(e) => setGlobalLeakDetection(prev => ({ ...prev, flowDurationThreshold: parseInt(e.target.value) }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <p className="text-xs text-gray-500 mt-1">Alert after continuous flow for this many hours</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Minimum Flow Rate (L/min)
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={globalLeakDetection.minFlowRateThreshold}
+              onChange={(e) => setGlobalLeakDetection(prev => ({ ...prev, minFlowRateThreshold: parseFloat(e.target.value) }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <p className="text-xs text-gray-500 mt-1">Only consider flow rates above this threshold</p>
+          </div>
+
+          <button
+            onClick={saveGlobalLeakDetection}
+            disabled={loading}
+            className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+          >
+            {loading ? 'Saving...' : 'Save Global Settings'}
+          </button>
+        </div>
+      </div>
+
+      <div className="p-6 bg-white border border-gray-200 rounded-lg">
+        <h4 className="text-sm font-medium text-gray-900 mb-4">Per-Device Settings</h4>
+        <p className="text-sm text-gray-600 mb-4">Override leak detection for individual devices.</p>
+
+        {devices.length === 0 ? (
+          <p className="text-sm text-gray-500">No devices found.</p>
+        ) : (
+          <div className="space-y-3">
+            {devices.map(device => {
+              const deviceSetting = leakDetectionSettings.find(s => s.device_id === device.id);
+              const isEnabled = deviceSetting ? deviceSetting.enabled : globalLeakDetection.enabled;
+
+              return (
+                <div key={device.id} className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">{device.name}</p>
+                    <p className="text-xs text-gray-500">{device.location}</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isEnabled}
+                      onChange={(e) => toggleDeviceLeakDetection(device.id, e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   const renderTabContent = () => {
     switch (activeTab) {
       case 'profile': return renderProfileSettings();
       case 'notifications': return renderNotificationSettings();
       case 'security': return renderSecuritySettings();
       case 'company': return renderCompanySettings();
+      case 'advanced': return renderAdvancedSettings();
       default: return renderProfileSettings();
     }
   };
