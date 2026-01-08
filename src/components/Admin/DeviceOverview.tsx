@@ -44,14 +44,22 @@ export default function DeviceOverview() {
     notehub_device_uid: '',
     firmware_version: '1.0.0',
     flow_sensor_type: '',
-    cloud_sync_publish_interval: 300,
-    cloud_sync_request_interval: 60,
+    flow_sensor_enabled: true,
+    flow_max_rate: 100.0,
+    flow_min_rate: 0.0,
+    flow_scaling_factor: 1.0,
     flow_calibration_mode: false,
     flow_publish_interval: 60000,
+    battery_enabled: true,
+    battery_min_charge: 20,
     battery_poll_interval: 300000,
     battery_armed: false,
+    cloud_sync_publish_interval: 300,
+    cloud_sync_request_interval: 60,
     storage_store_interval: 5000,
-    system_main_loop_interval: 1000
+    storage_base_timestamp: 0,
+    system_main_loop_interval: 1000,
+    nfc_enabled: false
   });
 
   useEffect(() => {
@@ -187,14 +195,22 @@ export default function DeviceOverview() {
       const updatedConfig = {
         ...selectedDevice.notehub_config,
         'settings.flow.sensor': newDevice.flow_sensor_type,
-        'cloud.sync.publish_interval': newDevice.cloud_sync_publish_interval,
-        'cloud.sync.request_interval': newDevice.cloud_sync_request_interval,
+        'flow_sensor.1.enabled': newDevice.flow_sensor_enabled,
+        'flow_sensor.1.max_flow_rate': newDevice.flow_max_rate,
+        'flow_sensor.1.min_flow_rate': newDevice.flow_min_rate,
+        'flow_sensor.1.scaling_factor': newDevice.flow_scaling_factor,
         'flow_sensor.1.calibration_mode': newDevice.flow_calibration_mode,
         'flow_sensor.1.publish_interval_ms': newDevice.flow_publish_interval,
+        'battery.enable': newDevice.battery_enabled,
+        'battery.min_charge': newDevice.battery_min_charge,
         'battery.poll_interval_ms': newDevice.battery_poll_interval,
         'settings.battery.armed': newDevice.battery_armed,
+        'cloud.sync.publish_interval': newDevice.cloud_sync_publish_interval,
+        'cloud.sync.request_interval': newDevice.cloud_sync_request_interval,
         'storage.ringbuffer.store_interval_ms': newDevice.storage_store_interval,
-        'system.main_loop_interval': newDevice.system_main_loop_interval
+        'storage.base.timestamp': newDevice.storage_base_timestamp,
+        'system.main_loop_interval': newDevice.system_main_loop_interval,
+        'nfc.enabled': newDevice.nfc_enabled
       };
 
       const updates = {
@@ -243,14 +259,22 @@ export default function DeviceOverview() {
       notehub_device_uid: device.notehub_device_uid || '',
       firmware_version: device.firmware_version,
       flow_sensor_type: config['settings.flow.sensor'] || '',
-      cloud_sync_publish_interval: config['cloud.sync.publish_interval'] || 300,
-      cloud_sync_request_interval: config['cloud.sync.request_interval'] || 60,
+      flow_sensor_enabled: config['flow_sensor.1.enabled'] !== undefined ? config['flow_sensor.1.enabled'] : true,
+      flow_max_rate: config['flow_sensor.1.max_flow_rate'] || 100.0,
+      flow_min_rate: config['flow_sensor.1.min_flow_rate'] || 0.0,
+      flow_scaling_factor: config['flow_sensor.1.scaling_factor'] || 1.0,
       flow_calibration_mode: config['flow_sensor.1.calibration_mode'] || false,
       flow_publish_interval: config['flow_sensor.1.publish_interval_ms'] || 60000,
+      battery_enabled: config['battery.enable'] !== undefined ? config['battery.enable'] : true,
+      battery_min_charge: config['battery.min_charge'] || 20,
       battery_poll_interval: config['battery.poll_interval_ms'] || 300000,
       battery_armed: config['settings.battery.armed'] || false,
+      cloud_sync_publish_interval: config['cloud.sync.publish_interval'] || 300,
+      cloud_sync_request_interval: config['cloud.sync.request_interval'] || 60,
       storage_store_interval: config['storage.ringbuffer.store_interval_ms'] || 5000,
-      system_main_loop_interval: config['system.main_loop_interval'] || 1000
+      storage_base_timestamp: config['storage.base.timestamp'] || 0,
+      system_main_loop_interval: config['system.main_loop_interval'] || 1000,
+      nfc_enabled: config['nfc.enabled'] || false
     });
     setShowEditModal(true);
   };
@@ -926,6 +950,17 @@ export default function DeviceOverview() {
               <div className="mb-4 bg-blue-50 p-4 rounded-lg">
                 <h5 className="text-sm font-medium text-gray-900 mb-3">Flow Sensor</h5>
                 <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={newDevice.flow_sensor_enabled}
+                        onChange={(e) => setNewDevice({...newDevice, flow_sensor_enabled: e.target.checked})}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>Enable Flow Sensor</span>
+                    </label>
+                  </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Flow Sensor Type</label>
                     <input
@@ -943,6 +978,36 @@ export default function DeviceOverview() {
                       step="1000"
                       value={newDevice.flow_publish_interval}
                       onChange={(e) => setNewDevice({...newDevice, flow_publish_interval: parseInt(e.target.value) || 60000})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Min Flow Rate (L/min)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={newDevice.flow_min_rate}
+                      onChange={(e) => setNewDevice({...newDevice, flow_min_rate: parseFloat(e.target.value) || 0.0})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Max Flow Rate (L/min)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={newDevice.flow_max_rate}
+                      onChange={(e) => setNewDevice({...newDevice, flow_max_rate: parseFloat(e.target.value) || 100.0})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Scaling Factor</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={newDevice.flow_scaling_factor}
+                      onChange={(e) => setNewDevice({...newDevice, flow_scaling_factor: parseFloat(e.target.value) || 1.0})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
@@ -989,6 +1054,28 @@ export default function DeviceOverview() {
               <div className="mb-4 bg-yellow-50 p-4 rounded-lg">
                 <h5 className="text-sm font-medium text-gray-900 mb-3">Battery</h5>
                 <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={newDevice.battery_enabled}
+                        onChange={(e) => setNewDevice({...newDevice, battery_enabled: e.target.checked})}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>Enable Battery Monitoring</span>
+                    </label>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Min Charge (%)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={newDevice.battery_min_charge}
+                      onChange={(e) => setNewDevice({...newDevice, battery_min_charge: parseInt(e.target.value) || 20})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Poll Interval (ms)</label>
                     <input
@@ -999,7 +1086,7 @@ export default function DeviceOverview() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
-                  <div>
+                  <div className="col-span-2">
                     <label className="flex items-center space-x-2 text-sm font-medium text-gray-700">
                       <input
                         type="checkbox"
@@ -1028,6 +1115,15 @@ export default function DeviceOverview() {
                     />
                   </div>
                   <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Base Timestamp</label>
+                    <input
+                      type="number"
+                      value={newDevice.storage_base_timestamp}
+                      onChange={(e) => setNewDevice({...newDevice, storage_base_timestamp: parseInt(e.target.value) || 0})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Main Loop Interval (ms)</label>
                     <input
                       type="number"
@@ -1036,6 +1132,17 @@ export default function DeviceOverview() {
                       onChange={(e) => setNewDevice({...newDevice, system_main_loop_interval: parseInt(e.target.value) || 1000})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
+                  </div>
+                  <div>
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={newDevice.nfc_enabled}
+                        onChange={(e) => setNewDevice({...newDevice, nfc_enabled: e.target.checked})}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>Enable NFC</span>
+                    </label>
                   </div>
                 </div>
               </div>

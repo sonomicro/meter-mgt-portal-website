@@ -1289,10 +1289,10 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                       <input
                         type="checkbox"
                         checked={advancedSettings['nfc.enabled']}
-                        onChange={(e) => setAdvancedSettings({...advancedSettings, 'nfc.enabled': e.target.checked})}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        disabled
+                        className="rounded border-gray-300 text-gray-400 cursor-not-allowed"
                       />
-                      <span>Enable NFC</span>
+                      <span className="text-gray-600">Enable NFC (Read-only)</span>
                     </label>
                   </div>
                 </div>
