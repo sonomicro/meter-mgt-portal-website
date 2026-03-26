@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseServiceRole } from '../lib/supabase';
 import type { User } from '../types';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -349,6 +349,18 @@ export async function createTenant(tenantData: any) {
     throw new Error('Supabase is not properly configured. Please check your environment variables.');
   }
 
+  // Check if tenant already exists
+  const { data: existingTenant } = await supabase
+    .from('tenants')
+    .select('email')
+    .eq('email', tenantData.email)
+    .maybeSingle();
+
+  if (existingTenant) {
+    throw new Error('A tenant with this email already exists.');
+  }
+
+  // Try to create auth user
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email: tenantData.email,
     password: tenantData.password,
@@ -360,6 +372,62 @@ export async function createTenant(tenantData: any) {
     }
   });
 
+  // If user already exists in auth, try to find their user_id and create tenant record
+  if (authError && authError.message.includes('User already registered')) {
+    console.log('Auth user already exists, attempting to create tenant record...');
+
+    if (!supabaseServiceRole) {
+      throw new Error('Service role key not configured. Cannot recover from this error.');
+    }
+
+    // Use service role to query auth.users table to get user_id by email
+    const { data: authUsers, error: authUsersError } = await supabaseServiceRole.auth.admin.listUsers();
+
+    if (authUsersError) {
+      throw new Error('Unable to verify user. Please use a different email or contact support.');
+    }
+
+    const existingAuthUser = authUsers.users.find(u => u.email === tenantData.email);
+
+    if (!existingAuthUser) {
+      throw new Error('User registration is in an inconsistent state. Please contact support.');
+    }
+
+    // Check if tenant record already exists for this user_id
+    const { data: existingByUserId } = await supabaseServiceRole
+      .from('tenants')
+      .select('*')
+      .eq('user_id', existingAuthUser.id)
+      .maybeSingle();
+
+    if (existingByUserId) {
+      throw new Error('A tenant account already exists for this user.');
+    }
+
+    // Create tenant record with existing user_id using service role to bypass RLS
+    const { data: tenantRecord, error: tenantError } = await supabaseServiceRole
+      .from('tenants')
+      .insert([{
+        user_id: existingAuthUser.id,
+        email: tenantData.email,
+        password_hash: '',
+        name: tenantData.name,
+        company: tenantData.company,
+        phone: tenantData.phone,
+        address: tenantData.address,
+        plan: tenantData.plan || 'basic'
+      }])
+      .select()
+      .single();
+
+    if (tenantError) {
+      console.error('Error creating tenant record:', tenantError);
+      throw new Error('Failed to create tenant record: ' + tenantError.message);
+    }
+
+    return tenantRecord;
+  }
+
   if (authError) {
     console.error('Error creating auth user:', authError);
     throw new Error('Failed to create tenant account: ' + authError.message);
@@ -369,6 +437,7 @@ export async function createTenant(tenantData: any) {
     throw new Error('Failed to create tenant account.');
   }
 
+  // Create tenant record
   const { data: tenantRecord, error: tenantError } = await supabase
     .from('tenants')
     .insert([{
@@ -382,11 +451,11 @@ export async function createTenant(tenantData: any) {
       plan: tenantData.plan || 'basic'
     }])
     .select()
-    .maybeSingle();
+    .single();
 
   if (tenantError) {
     console.error('Error creating tenant record:', tenantError);
-    throw new Error('Failed to create tenant account: ' + tenantError.message);
+    throw new Error('Failed to create tenant record: ' + tenantError.message);
   }
 
   return tenantRecord;

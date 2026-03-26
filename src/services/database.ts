@@ -1,4 +1,4 @@
-import { supabase, Database } from '../lib/supabase';
+import { supabase, supabaseServiceRole, Database } from '../lib/supabase';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { getCurrentUser } from './auth';
 import { NotehubService } from './notehub';
@@ -51,16 +51,20 @@ export class TenantService {
 
     try {
       console.log('Fetching tenants from Supabase...');
-      const { data, error } = await supabase
+
+      const currentUser = await getCurrentUser();
+      const client = (currentUser?.role === 'admin' && supabaseServiceRole) ? supabaseServiceRole : supabase;
+
+      const { data, error } = await client
         .from('tenants')
         .select('*')
         .order('created_at', { ascending: false });
-        
+
       if (error) {
         console.error('Supabase error fetching tenants:', error);
         throw new Error(`Failed to fetch tenants: ${error.message}`);
       }
-      
+
       console.log('Successfully fetched tenants:', data?.length || 0);
       
       // Augment each tenant with calculated statistics
