@@ -14,6 +14,7 @@ import FleetManagement from './components/Tenant/FleetManagement';
 import Alerts from './components/Tenant/Alerts';
 import TenantSettings from './components/Tenant/TenantSettings';
 import { AuthService } from './services/auth';
+import { TenantService } from './services/database';
 import { User } from './types';
 
 // Expose AuthService globally for debugging
@@ -28,6 +29,7 @@ function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [tenantLogo, setTenantLogo] = useState<string | null>(null);
 
   // Check for existing session on app load
   useEffect(() => {
@@ -36,7 +38,14 @@ function App() {
         // Check for stored demo session first
         const storedUser = localStorage.getItem('currentUser');
         if (storedUser) {
-          setUser(JSON.parse(storedUser));
+          const userData = JSON.parse(storedUser);
+          setUser(userData);
+
+          // Load tenant customization if user is a tenant
+          if (userData.role === 'tenant') {
+            loadTenantCustomization(userData.id);
+          }
+
           setLoading(false);
           return;
         }
@@ -46,6 +55,11 @@ function App() {
           const currentUser = await AuthService.getCurrentUser();
           if (currentUser) {
             setUser(currentUser);
+
+            // Load tenant customization if user is a tenant
+            if (currentUser.role === 'tenant') {
+              loadTenantCustomization(currentUser.id);
+            }
           }
         }
       } catch (error) {
@@ -58,9 +72,25 @@ function App() {
     checkSession();
   }, []);
 
+  const loadTenantCustomization = async (tenantId: string) => {
+    try {
+      const tenant = await TenantService.getTenant(tenantId);
+      if (tenant?.logo_url) {
+        setTenantLogo(tenant.logo_url);
+      }
+    } catch (error) {
+      console.error('Error loading tenant customization:', error);
+    }
+  };
+
   const handleLogin = (userData: User) => {
     setUser(userData);
     setActiveTab('dashboard');
+
+    // Load tenant customization if user is a tenant
+    if (userData.role === 'tenant') {
+      loadTenantCustomization(userData.id);
+    }
   };
 
   const handleLogout = async () => {
@@ -148,10 +178,11 @@ function App() {
       />
       
       <div className="flex-1 flex flex-col min-h-screen">
-        <Header 
+        <Header
           user={user}
           onLogout={handleLogout}
           onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+          logoUrl={user.role === 'tenant' ? tenantLogo : null}
         />
         
         <main className="flex-1 p-6 overflow-hidden max-w-full">

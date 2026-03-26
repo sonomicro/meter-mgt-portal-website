@@ -1,14 +1,15 @@
 import React from 'react';
-import { User, Settings, LogOut, Menu } from 'lucide-react';
+import { User, Settings, LogOut, Menu, Droplets } from 'lucide-react';
 import { User as UserType } from '../../types';
 
 interface HeaderProps {
   user: UserType;
   onLogout: () => void;
   onToggleSidebar?: () => void;
+  logoUrl?: string | null;
 }
 
-export default function Header({ user, onLogout, onToggleSidebar }: HeaderProps) {
+export default function Header({ user, onLogout, onToggleSidebar, logoUrl }: HeaderProps) {
   return (
     <header className="bg-white shadow-sm border-b border-gray-200 px-6 py-4">
       <div className="flex items-center justify-between">
@@ -20,6 +21,17 @@ export default function Header({ user, onLogout, onToggleSidebar }: HeaderProps)
             >
               <Menu className="h-5 w-5 text-gray-600" />
             </button>
+          )}
+          {logoUrl ? (
+            <img
+              src={logoUrl}
+              alt="Company Logo"
+              className="h-10 w-auto object-contain"
+            />
+          ) : (
+            <div className="p-2 bg-blue-100 rounded-lg">
+              <Droplets className="h-6 w-6 text-blue-600" />
+            </div>
           )}
           <div>
             <h1 className="text-xl font-semibold text-gray-900">

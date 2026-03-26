@@ -3,7 +3,6 @@ import { Plus, Search, MoreVertical, Edit, Trash2, Eye, UserPlus, Building, Mail
 import { TenantService, DeviceService } from '../../services/database';
 import { getTotalDataUsage, getWebhookUsage, getProxyUsage } from '../../services/dataUsage';
 import { DeviceFleetAssignmentService } from '../../services/deviceFleetAssignment';
-import { NotehubService } from '../../services/notehub';
 import { supabase } from '../../lib/supabase';
 import type { Database as SupabaseDatabase } from '../../lib/supabase';
 import type { User } from '../../types';

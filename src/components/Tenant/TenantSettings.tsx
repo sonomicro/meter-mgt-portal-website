@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Save, User, Bell, Shield, Key, Mail, Phone, Building, Settings, AlertTriangle } from 'lucide-react';
-import { supabaseServiceRole } from '../../lib/supabase';
+import { Save, User, Bell, Shield, Key, Mail, Phone, Building, Settings, AlertTriangle, Upload, Image } from 'lucide-react';
+import { supabaseServiceRole, supabase } from '../../lib/supabase';
 import { getCurrentUser } from '../../services/auth';
+import { TenantService } from '../../services/database';
 import type { Database } from '../../lib/supabase';
 
 type Device = Database['public']['Tables']['devices']['Row'];
@@ -36,10 +37,27 @@ export default function TenantSettings() {
     minFlowRateThreshold: 1.0
   });
   const [loading, setLoading] = useState(false);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   useEffect(() => {
     loadDevicesAndSettings();
+    loadTenantCustomization();
   }, []);
+
+  const loadTenantCustomization = async () => {
+    try {
+      const user = await getCurrentUser();
+      if (!user || user.role !== 'tenant') return;
+
+      const tenant = await TenantService.getTenant(user.id);
+      if (tenant?.logo_url) {
+        setLogoUrl(tenant.logo_url);
+      }
+    } catch (error) {
+      console.error('Error loading tenant customization:', error);
+    }
+  };
 
   const loadDevicesAndSettings = async () => {
     try {
@@ -71,6 +89,133 @@ export default function TenantSettings() {
     }
   };
 
+  const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    console.log('File selected:', file.name, file.type, file.size);
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      return;
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      alert('File size must be less than 2MB');
+      return;
+    }
+
+    try {
+      setUploadingLogo(true);
+      console.log('Getting current user...');
+      const user = await getCurrentUser();
+      console.log('Current user:', user);
+
+      if (!user) {
+        alert('Authentication error: No user found. Please log in again.');
+        return;
+      }
+
+      if (user.role !== 'tenant') {
+        alert('Authentication error: Only tenants can upload logos.');
+        return;
+      }
+
+      if (!supabaseServiceRole) {
+        alert('Storage service not available. Please contact support.');
+        return;
+      }
+
+      const tenantId = user.id;
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${tenantId}/logo.${fileExt}`;
+      console.log('Uploading file:', fileName);
+
+      const { data: uploadData, error: uploadError } = await supabaseServiceRole.storage
+        .from('tenant-logos')
+        .upload(fileName, file, {
+          upsert: true,
+          contentType: file.type,
+        });
+
+      if (uploadError) {
+        console.error('Upload error:', uploadError);
+        alert('Failed to upload logo: ' + uploadError.message);
+        return;
+      }
+
+      console.log('Upload successful:', uploadData);
+
+      const { data: publicUrlData } = supabaseServiceRole.storage
+        .from('tenant-logos')
+        .getPublicUrl(fileName);
+
+      const publicUrl = publicUrlData.publicUrl;
+      console.log('Public URL:', publicUrl);
+
+      const { error: updateError } = await supabaseServiceRole
+        .from('tenants')
+        .update({ logo_url: publicUrl })
+        .eq('id', tenantId);
+
+      if (updateError) {
+        console.error('Update error:', updateError);
+        alert('Failed to update logo URL: ' + updateError.message);
+        return;
+      }
+
+      console.log('Tenant updated successfully');
+      setLogoUrl(publicUrl);
+      alert('Logo uploaded successfully!');
+
+      window.location.reload();
+    } catch (error) {
+      console.error('Error uploading logo:', error);
+      alert('Failed to upload logo: ' + (error as Error).message);
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
+  const handleLogoRemove = async () => {
+    try {
+      setUploadingLogo(true);
+      const user = await getCurrentUser();
+      if (!user || user.role !== 'tenant') {
+        alert('Authentication error');
+        return;
+      }
+
+      if (!supabaseServiceRole) {
+        alert('Storage service not available');
+        return;
+      }
+
+      const tenantId = user.id;
+
+      const { error: updateError } = await supabaseServiceRole
+        .from('tenants')
+        .update({ logo_url: null })
+        .eq('id', tenantId);
+
+      if (updateError) {
+        console.error('Update error:', updateError);
+        alert('Failed to remove logo');
+        return;
+      }
+
+      setLogoUrl(null);
+      alert('Logo removed successfully!');
+
+      window.location.reload();
+    } catch (error) {
+      console.error('Error removing logo:', error);
+      alert('Failed to remove logo');
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
   const handleSettingChange = (key: string, value: any) => {
     setSettings(prev => ({ ...prev, [key]: value }));
   };
@@ -80,6 +225,7 @@ export default function TenantSettings() {
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'security', label: 'Security', icon: Shield },
     { id: 'company', label: 'Company Info', icon: Building },
+    { id: 'branding', label: 'Branding', icon: Image },
     { id: 'advanced', label: 'Advanced', icon: Settings },
   ];
 
@@ -433,6 +579,82 @@ export default function TenantSettings() {
     }
   };
 
+  const renderBrandingSettings = () => (
+    <div className="space-y-6">
+      <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <h3 className="text-lg font-semibold text-blue-900 mb-2">Company Branding</h3>
+        <p className="text-sm text-blue-700">
+          Customize your dashboard with your company logo to create a personalized experience.
+        </p>
+      </div>
+
+      <div className="p-6 bg-white border border-gray-200 rounded-lg">
+        <h4 className="text-sm font-medium text-gray-900 mb-4">Company Logo</h4>
+        <p className="text-sm text-gray-600 mb-6">
+          Upload your company logo. It will appear in the header when you're logged in.
+        </p>
+
+        <div className="flex items-start space-x-6">
+          <div className="flex-shrink-0">
+            {logoUrl ? (
+              <div className="relative">
+                <img
+                  src={logoUrl}
+                  alt="Company Logo"
+                  className="h-24 w-auto max-w-[200px] object-contain border border-gray-200 rounded-lg p-2"
+                />
+              </div>
+            ) : (
+              <div className="h-24 w-24 bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200">
+                <Image className="h-12 w-12 text-gray-400" />
+              </div>
+            )}
+          </div>
+
+          <div className="flex-1 space-y-4">
+            <div>
+              <input
+                type="file"
+                id="logo-upload"
+                accept="image/*"
+                onChange={handleLogoUpload}
+                disabled={uploadingLogo}
+                className="hidden"
+              />
+              <label
+                htmlFor="logo-upload"
+                className={`inline-flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors cursor-pointer ${
+                  uploadingLogo
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : 'bg-blue-600 hover:bg-blue-700'
+                } text-white`}
+              >
+                <Upload className="h-4 w-4" />
+                <span>{uploadingLogo ? 'Uploading...' : logoUrl ? 'Change Logo' : 'Upload Logo'}</span>
+              </label>
+            </div>
+
+            {logoUrl && (
+              <button
+                onClick={handleLogoRemove}
+                disabled={uploadingLogo}
+                className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50"
+              >
+                Remove Logo
+              </button>
+            )}
+
+            <div className="text-sm text-gray-500">
+              <p>• Recommended: PNG or JPG format</p>
+              <p>• Maximum file size: 2MB</p>
+              <p>• Optimal dimensions: 200x50 pixels</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   const renderAdvancedSettings = () => (
     <div className="space-y-6">
       <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
@@ -548,6 +770,7 @@ export default function TenantSettings() {
       case 'notifications': return renderNotificationSettings();
       case 'security': return renderSecuritySettings();
       case 'company': return renderCompanySettings();
+      case 'branding': return renderBrandingSettings();
       case 'advanced': return renderAdvancedSettings();
       default: return renderProfileSettings();
     }
