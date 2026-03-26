@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Plus, Search, MoreVertical, Edit, Trash2, Eye, UserPlus, Building, Mail, Phone, Calendar, Filter, MapPin, Activity, Database, Clock, X, AlertTriangle, Key, Webhook, Server } from 'lucide-react';
+import { Plus, Search, MoreVertical, CreditCard as Edit, Trash2, Eye, UserPlus, Building, Mail, Phone, Calendar, Filter, MapPin, Activity, Database, Clock, X, AlertTriangle, Key, Webhook, Server } from 'lucide-react';
 import { TenantService, DeviceService } from '../../services/database';
+import { AuthService } from '../../services/auth';
 import { getTotalDataUsage, getWebhookUsage, getProxyUsage } from '../../services/dataUsage';
 import { DeviceFleetAssignmentService } from '../../services/deviceFleetAssignment';
 import { supabase } from '../../lib/supabase';
@@ -141,12 +142,12 @@ export default function TenantManagement({ user }: TenantManagementProps) {
         alert('Passwords do not match');
         return;
       }
-      
+
       if (newTenant.password.length < 6) {
         alert('Password must be at least 6 characters long');
         return;
       }
-      
+
       const tenantData = {
         name: newTenant.name,
         email: newTenant.email,
@@ -154,11 +155,11 @@ export default function TenantManagement({ user }: TenantManagementProps) {
         phone: newTenant.phone || null,
         address: newTenant.address || null,
         plan: newTenant.plan,
-        password_hash: await hashPassword(newTenant.password)
+        password: newTenant.password
       };
-      
-      await TenantService.createTenant(tenantData);
-      await loadTenants(); // Reload the list
+
+      await AuthService.createTenant(tenantData);
+      await loadTenants();
       setNewTenant({ name: '', email: '', company: '', phone: '', address: '', plan: 'basic', password: '', confirmPassword: '' });
       setShowAddModal(false);
     } catch (error) {
@@ -178,24 +179,14 @@ export default function TenantManagement({ user }: TenantManagementProps) {
           address: newTenant.address || null,
           plan: newTenant.plan
         };
-        
-        // Only update password if provided
+
         if (newTenant.password) {
-          if (newTenant.password !== newTenant.confirmPassword) {
-            alert('Passwords do not match');
-            return;
-          }
-
-          if (newTenant.password.length < 6) {
-            alert('Password must be at least 6 characters long');
-            return;
-          }
-
-          updateData.password_hash = await hashPassword(newTenant.password);
+          alert('To update password, please use the Reset Password option instead.');
+          return;
         }
-        
+
         await TenantService.updateTenant(selectedTenant.id, updateData);
-        await loadTenants(); // Reload the list
+        await loadTenants();
         setShowEditModal(false);
         setSelectedTenant(null);
         setNewTenant({ name: '', email: '', company: '', phone: '', address: '', plan: 'basic', password: '', confirmPassword: '' });

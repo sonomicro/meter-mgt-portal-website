@@ -13,6 +13,7 @@ import WaterUsage from './components/Tenant/WaterUsage';
 import FleetManagement from './components/Tenant/FleetManagement';
 import Alerts from './components/Tenant/Alerts';
 import TenantSettings from './components/Tenant/TenantSettings';
+import NFCTapHistory from './components/Tenant/NFCTapHistory';
 import { AuthService } from './services/auth';
 import { TenantService } from './services/database';
 import { User } from './types';
@@ -136,6 +137,8 @@ function App() {
           return <FleetManagement user={user} />;
         case 'alerts':
           return <Alerts />;
+        case 'nfc-taps':
+          return <NFCTapHistory tenantId={user.id} />;
         case 'settings':
           return <TenantSettings />;
         default:
@@ -164,19 +167,19 @@ function App() {
     <div className="min-h-screen bg-gray-50 flex">
       {/* Sidebar Overlay for Mobile */}
       {sidebarOpen && (
-        <div 
+        <div
           className="fixed inset-0 bg-black bg-opacity-50 z-20 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
-      
-      <Sidebar 
+
+      <Sidebar
         userRole={user.role}
         activeTab={activeTab}
         onTabChange={setActiveTab}
         isOpen={sidebarOpen}
       />
-      
+
       <div className="flex-1 flex flex-col min-h-screen">
         <Header
           user={user}
@@ -184,7 +187,7 @@ function App() {
           onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           logoUrl={user.role === 'tenant' ? tenantLogo : null}
         />
-        
+
         <main className="flex-1 p-6 overflow-hidden max-w-full">
           {renderContent()}
         </main>
