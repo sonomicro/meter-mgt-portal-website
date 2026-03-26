@@ -1,13 +1,14 @@
 import React from 'react';
-import { 
-  BarChart3, 
-  Users, 
-  Settings, 
-  Droplets, 
-  Wifi, 
+import {
+  BarChart3,
+  Users,
+  Settings,
+  Droplets,
+  Wifi,
   AlertTriangle,
   Home,
-  Database
+  Database,
+  Smartphone
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -31,6 +32,7 @@ export default function Sidebar({ userRole, activeTab, onTabChange, isOpen }: Si
     { id: 'usage', label: 'Water Usage', icon: Droplets },
     { id: 'devices', label: 'Fleet Management', icon: Wifi },
     { id: 'alerts', label: 'Alerts', icon: AlertTriangle },
+    { id: 'nfc-taps', label: 'NFC Tap History', icon: Smartphone },
     { id: 'settings', label: 'Settings', icon: Settings },
   ];
 
