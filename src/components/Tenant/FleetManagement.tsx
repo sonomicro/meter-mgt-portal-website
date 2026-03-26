@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Search, MoreVertical, CreditCard as Edit, Trash2, Wifi, WifiOff, Wrench, Battery, MapPin, Calendar, Download, Settings, Zap, AlertTriangle, X, Save, Upload, CheckCircle, Clock, Globe, Activity, Tag, Folder, FolderPlus, Antenna } from 'lucide-react';
 import { DeviceService, FleetGroupService } from '../../services/database';
-import { NotehubService } from '../../services/notehub';
 import { getCurrentUser } from '../../services/auth';
 import type { Database } from '../../lib/supabase';
 import type { User } from '../../types';
@@ -71,15 +70,16 @@ export default function FleetManagement({ user }: FleetManagementProps) {
     'flow_sensor.1.min_flow_rate': 0.0,
     'flow_sensor.1.calibration_mode': false,
     'flow_sensor.1.scaling_factor': 1.0,
-    'flow_sensor.1.publish_interval_ms': 60000,
+    'flow_sensor.1.sample_interval_ms': 60000,
     'storage.ringbuffer.store_interval_ms': 5000,
     'storage.base.timestamp': 0,
     'nfc.enabled': false,
+    'NFC.ENABLED': false,
     'battery.enable': true,
     'battery.poll_interval_ms': 300000,
     'battery.min_charge': 20,
-    'cloud.sync.publish_interval': 300,
-    'cloud.sync.request_interval': 60,
+    'cloud.sync.publish_interval_s': 300,
+    'cloud.sync.request_interval_s': 60,
     'system.main_loop_interval': 1000,
     'settings.board.serial': '',
     'settings.board.uid': '',
@@ -400,15 +400,16 @@ export default function FleetManagement({ user }: FleetManagementProps) {
       'flow_sensor.1.min_flow_rate': config['flow_sensor.1.min_flow_rate'] || 0.0,
       'flow_sensor.1.calibration_mode': config['flow_sensor.1.calibration_mode'] || false,
       'flow_sensor.1.scaling_factor': config['flow_sensor.1.scaling_factor'] || 1.0,
-      'flow_sensor.1.publish_interval_ms': config['flow_sensor.1.publish_interval_ms'] || 60000,
+      'flow_sensor.1.sample_interval_ms': config['flow_sensor.1.sample_interval_ms'] || config['flow_sensor.1.publish_interval_ms'] || 60000,
       'storage.ringbuffer.store_interval_ms': config['storage.ringbuffer.store_interval_ms'] || 5000,
       'storage.base.timestamp': config['storage.base.timestamp'] || 0,
-      'nfc.enabled': config['nfc.enabled'] || false,
+      'nfc.enabled': config['nfc.enabled'] || config['NFC.ENABLED'] || false,
+      'NFC.ENABLED': config['NFC.ENABLED'] || config['nfc.enabled'] || false,
       'battery.enable': config['battery.enable'] !== undefined ? config['battery.enable'] : true,
       'battery.poll_interval_ms': config['battery.poll_interval_ms'] || 300000,
       'battery.min_charge': config['battery.min_charge'] || 20,
-      'cloud.sync.publish_interval': config['cloud.sync.publish_interval'] || 300,
-      'cloud.sync.request_interval': config['cloud.sync.request_interval'] || 60,
+      'cloud.sync.publish_interval_s': config['cloud.sync.publish_interval_s'] || config['cloud.sync.publish_interval'] || 300,
+      'cloud.sync.request_interval_s': config['cloud.sync.request_interval_s'] || config['cloud.sync.request_interval'] || 60,
       'system.main_loop_interval': config['system.main_loop_interval'] || 1000,
       'settings.board.serial': config['settings.board.serial'] || '',
       'settings.board.uid': config['settings.board.uid'] || '',
@@ -1141,11 +1142,11 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-500 mb-1">Publish Interval (ms) (Admin Only)</label>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Sample Interval (ms) (Admin Only)</label>
                     <input
                       type="number"
                       step="1000"
-                      value={advancedSettings['flow_sensor.1.publish_interval_ms']}
+                      value={advancedSettings['flow_sensor.1.sample_interval_ms']}
                       disabled
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
                     />
@@ -1248,7 +1249,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                     <label className="block text-sm font-medium text-gray-500 mb-1">Publish Interval (s) (Admin Only)</label>
                     <input
                       type="number"
-                      value={advancedSettings['cloud.sync.publish_interval']}
+                      value={advancedSettings['cloud.sync.publish_interval_s']}
                       disabled
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
                     />
@@ -1258,7 +1259,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                     <label className="block text-sm font-medium text-gray-500 mb-1">Request Interval (s) (Admin Only)</label>
                     <input
                       type="number"
-                      value={advancedSettings['cloud.sync.request_interval']}
+                      value={advancedSettings['cloud.sync.request_interval_s']}
                       disabled
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
                     />

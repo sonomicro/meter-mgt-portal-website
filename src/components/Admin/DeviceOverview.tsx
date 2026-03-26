@@ -2,13 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { Search, Plus, Settings, Wifi, WifiOff, Battery, MapPin, AlertTriangle, Activity, Database as DatabaseIcon, Globe, CreditCard as Edit, Trash2, UserPlus, Eye } from 'lucide-react';
 import { DeviceService, TenantService } from '../../services/database';
 import { DeviceFleetAssignmentService } from '../../services/deviceFleetAssignment';
-import { NotehubService } from '../../services/notehub';
 import { supabaseServiceRole } from '../../lib/supabase';
 import type { Database } from '../../lib/supabase';
-import type { NotehubDevice } from '../../services/notehub';
 
 type Device = Database['public']['Tables']['devices']['Row'];
 type Tenant = Database['public']['Tables']['tenants']['Row'];
+
+interface NotehubDevice {
+  uid: string;
+  serial_number: string;
+  last_activity: string;
+}
 
 export default function DeviceOverview() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -49,13 +53,11 @@ export default function DeviceOverview() {
     flow_min_rate: 0.0,
     flow_scaling_factor: 1.0,
     flow_calibration_mode: false,
-    flow_publish_interval: 60000,
+    flow_sample_interval: 60000,
     battery_enabled: true,
     battery_min_charge: 20,
     battery_poll_interval: 300000,
     battery_armed: false,
-    cloud_sync_publish_interval: 300,
-    cloud_sync_request_interval: 60,
     storage_store_interval: 5000,
     storage_base_timestamp: 0,
     system_main_loop_interval: 1000,
@@ -76,37 +78,67 @@ export default function DeviceOverview() {
     }
   };
 
+  const syncWithNotehub = async (action: 'status' | 'sync' = 'status') => {
+    const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+    const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+    const response = await fetch(
+      `${SUPABASE_URL}/functions/v1/admin-sync-devices?action=${action}`,
+      {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'apikey': SUPABASE_ANON_KEY,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.details || error.error || 'Failed to sync with Notehub');
+    }
+
+    return await response.json();
+  };
+
   const loadDevices = async () => {
     try {
       setLoading(true);
       setError(null);
-      
+
       const supabaseDevices = await DeviceService.getDevices();
       setDevices(supabaseDevices);
-      
-      // Try to load Notehub devices if configured
-      if (NotehubService.isConfigured()) {
-        try {
-          console.log('🔍 Loading Notehub devices...');
-          const notehubData = await NotehubService.getAllDevicesFromNotehub();
-          console.log('✅ Loaded Notehub devices:', notehubData.length);
-          setNotehubDevices(notehubData);
-          
-          // Calculate sync status
-          calculateSyncStatus(supabaseDevices, notehubData);
-        } catch (notehubError) {
-          console.error('Error loading Notehub devices:', notehubError);
-          if (notehubError.message.includes('notehub-proxy')) {
-            setError('Notehub proxy not deployed. Please check that the Edge Function is deployed in Supabase.');
-          } else if (notehubError.message.includes('credentials not configured')) {
-            setError('Notehub credentials not configured. Please set NOTEHUB_CLIENT_ID and NOTEHUB_CLIENT_SECRET in Supabase Edge Function environment variables.');
-          } else {
-            setError(`Notehub integration error: ${notehubError.message}`);
-          }
-          setNotehubDevices([]);
+
+      // Try to sync with Notehub via edge function
+      try {
+        console.log('🔍 Syncing with Notehub...');
+        const syncResult = await syncWithNotehub('sync');
+        console.log('✅ Sync result:', syncResult);
+
+        // Update sync status
+        setSyncStatus({
+          lastSync: syncResult.lastSync || new Date().toISOString(),
+          totalDevices: syncResult.totalDevices || 0,
+          syncedDevices: syncResult.syncedDevices || 0,
+          orphanedDevices: syncResult.orphanedDevices || [],
+          unregisteredDevices: syncResult.unregisteredDevices || []
+        });
+
+        // Set notehub devices for the UI
+        if (syncResult.unregisteredDevices) {
+          setNotehubDevices(syncResult.unregisteredDevices);
         }
-      } else {
-        console.warn('Notehub not configured, skipping Notehub device sync');
+
+        // Reload devices after sync to get updated last_seen
+        const updatedDevices = await DeviceService.getDevices();
+        setDevices(updatedDevices);
+      } catch (notehubError: any) {
+        console.error('Error syncing with Notehub:', notehubError);
+        if (notehubError.message.includes('credentials not configured')) {
+          setError('Notehub credentials not configured. Please set NOTEHUB_CLIENT_ID and NOTEHUB_CLIENT_SECRET in Supabase Edge Function environment variables.');
+        } else {
+          setError(`Notehub integration error: ${notehubError.message}`);
+        }
         setNotehubDevices([]);
       }
     } catch (error) {
@@ -200,17 +232,16 @@ export default function DeviceOverview() {
         'flow_sensor.1.min_flow_rate': newDevice.flow_min_rate,
         'flow_sensor.1.scaling_factor': newDevice.flow_scaling_factor,
         'flow_sensor.1.calibration_mode': newDevice.flow_calibration_mode,
-        'flow_sensor.1.publish_interval_ms': newDevice.flow_publish_interval,
+        'flow_sensor.1.sample_interval_ms': newDevice.flow_sample_interval,
         'battery.enable': newDevice.battery_enabled,
         'battery.min_charge': newDevice.battery_min_charge,
         'battery.poll_interval_ms': newDevice.battery_poll_interval,
         'settings.battery.armed': newDevice.battery_armed,
-        'cloud.sync.publish_interval': newDevice.cloud_sync_publish_interval,
-        'cloud.sync.request_interval': newDevice.cloud_sync_request_interval,
         'storage.ringbuffer.store_interval_ms': newDevice.storage_store_interval,
         'storage.base.timestamp': newDevice.storage_base_timestamp,
         'system.main_loop_interval': newDevice.system_main_loop_interval,
-        'nfc.enabled': newDevice.nfc_enabled
+        'nfc.enabled': newDevice.nfc_enabled,
+        'NFC.ENABLED': newDevice.nfc_enabled
       };
 
       const updates = {
@@ -224,6 +255,34 @@ export default function DeviceOverview() {
       };
 
       await DeviceService.updateDevice(selectedDevice.id, updates);
+
+      // Sync environment variables to Notehub
+      if (newDevice.notehub_device_uid) {
+        const environmentVariables: Record<string, string> = {};
+
+        // Convert all settings to string format for Notehub
+        Object.entries(updatedConfig).forEach(([key, value]) => {
+          if (typeof value === 'boolean') {
+            environmentVariables[key] = value ? 'true' : 'false';
+          } else if (typeof value === 'number') {
+            environmentVariables[key] = value.toString();
+          } else if (value !== null && value !== undefined) {
+            environmentVariables[key] = value as string;
+          }
+        });
+
+        try {
+          await DeviceService.updateDeviceEnvironmentVariables(
+            selectedDevice.id,
+            environmentVariables
+          );
+          console.log('Device settings synced to Notehub successfully');
+        } catch (syncError) {
+          console.error('Failed to sync to Notehub:', syncError);
+          alert('Device updated locally, but failed to sync to Notehub. The device may not receive the new settings.');
+        }
+      }
+
       await loadDevices();
       setShowEditModal(false);
       setSelectedDevice(null);
@@ -264,17 +323,15 @@ export default function DeviceOverview() {
       flow_min_rate: config['flow_sensor.1.min_flow_rate'] || 0.0,
       flow_scaling_factor: config['flow_sensor.1.scaling_factor'] || 1.0,
       flow_calibration_mode: config['flow_sensor.1.calibration_mode'] || false,
-      flow_publish_interval: config['flow_sensor.1.publish_interval_ms'] || 60000,
+      flow_sample_interval: config['flow_sensor.1.sample_interval_ms'] || 60000,
       battery_enabled: config['battery.enable'] !== undefined ? config['battery.enable'] : true,
       battery_min_charge: config['battery.min_charge'] || 20,
       battery_poll_interval: config['battery.poll_interval_ms'] || 300000,
       battery_armed: config['settings.battery.armed'] || false,
-      cloud_sync_publish_interval: config['cloud.sync.publish_interval'] || 300,
-      cloud_sync_request_interval: config['cloud.sync.request_interval'] || 60,
       storage_store_interval: config['storage.ringbuffer.store_interval_ms'] || 5000,
       storage_base_timestamp: config['storage.base.timestamp'] || 0,
       system_main_loop_interval: config['system.main_loop_interval'] || 1000,
-      nfc_enabled: config['nfc.enabled'] || false
+      nfc_enabled: config['nfc.enabled'] || config['NFC.ENABLED'] || false
     });
     setShowEditModal(true);
   };
@@ -574,7 +631,7 @@ export default function DeviceOverview() {
           </div>
           <div>
             <p className="text-2xl font-bold text-gray-900 mb-1">
-              {NotehubService.isConfigured() ? 'Connected' : 'Not Connected'}
+              {syncStatus.lastSync ? 'Connected' : 'Not Connected'}
             </p>
             <p className="text-sm text-gray-600">Notehub Status</p>
           </div>
@@ -972,12 +1029,12 @@ export default function DeviceOverview() {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Publish Interval (ms)</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Sample Interval (ms)</label>
                     <input
                       type="number"
                       step="1000"
-                      value={newDevice.flow_publish_interval}
-                      onChange={(e) => setNewDevice({...newDevice, flow_publish_interval: parseInt(e.target.value) || 60000})}
+                      value={newDevice.flow_sample_interval}
+                      onChange={(e) => setNewDevice({...newDevice, flow_sample_interval: parseInt(e.target.value) || 60000})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
@@ -1011,7 +1068,7 @@ export default function DeviceOverview() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
-                  <div className="col-span-2">
+                  <div>
                     <label className="flex items-center space-x-2 text-sm font-medium text-gray-700">
                       <input
                         type="checkbox"
@@ -1021,31 +1078,6 @@ export default function DeviceOverview() {
                       />
                       <span>Calibration Mode</span>
                     </label>
-                  </div>
-                </div>
-              </div>
-
-              {/* Cloud Sync Settings */}
-              <div className="mb-4 bg-purple-50 p-4 rounded-lg">
-                <h5 className="text-sm font-medium text-gray-900 mb-3">Cloud Sync</h5>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Publish Interval (s)</label>
-                    <input
-                      type="number"
-                      value={newDevice.cloud_sync_publish_interval}
-                      onChange={(e) => setNewDevice({...newDevice, cloud_sync_publish_interval: parseInt(e.target.value) || 300})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Request Interval (s)</label>
-                    <input
-                      type="number"
-                      value={newDevice.cloud_sync_request_interval}
-                      onChange={(e) => setNewDevice({...newDevice, cloud_sync_request_interval: parseInt(e.target.value) || 60})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
                   </div>
                 </div>
               </div>
@@ -1360,8 +1392,8 @@ export default function DeviceOverview() {
                         <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['flow_sensor.1.min_flow_rate']} L/min</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Publish Interval:</span>
-                        <span className="text-gray-900 font-medium">{(deviceSettings.notehubConfig['flow_sensor.1.publish_interval_ms'] / 1000).toFixed(0)}s</span>
+                        <span className="text-gray-600">Sample Interval:</span>
+                        <span className="text-gray-900 font-medium">{(deviceSettings.notehubConfig['flow_sensor.1.sample_interval_ms'] / 1000).toFixed(0)}s</span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-gray-600">Calibration Mode:</span>
@@ -1398,20 +1430,6 @@ export default function DeviceOverview() {
                         <span className={`px-2 py-1 rounded text-xs font-medium ${deviceSettings.notehubConfig['settings.battery.armed'] ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
                           {deviceSettings.notehubConfig['settings.battery.armed'] ? 'Yes' : 'No'}
                         </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mb-4">
-                    <p className="text-xs text-gray-600 mb-2 font-medium uppercase">Cloud Sync</p>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Publish Interval:</span>
-                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['cloud.sync.publish_interval']}s</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Request Interval:</span>
-                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['cloud.sync.request_interval']}s</span>
                       </div>
                     </div>
                   </div>
