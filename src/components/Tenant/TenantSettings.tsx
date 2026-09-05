@@ -8,6 +8,11 @@ import type { Database } from '../../lib/supabase';
 type Device = Database['public']['Tables']['devices']['Row'];
 type LeakDetectionSetting = Database['public']['Tables']['leak_detection_settings']['Row'];
 
+interface NotificationPreferences {
+  emailNotificationsEnabled: boolean;
+  lowBatteryAlerts: boolean;
+}
+
 export default function TenantSettings() {
   const [activeTab, setActiveTab] = useState('profile');
   const [settings, setSettings] = useState({
@@ -39,11 +44,65 @@ export default function TenantSettings() {
   const [loading, setLoading] = useState(false);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>({
+    emailNotificationsEnabled: true,
+    lowBatteryAlerts: true
+  });
+  const [savingNotifications, setSavingNotifications] = useState(false);
 
   useEffect(() => {
     loadDevicesAndSettings();
     loadTenantCustomization();
+    loadNotificationPreferences();
   }, []);
+
+  const loadNotificationPreferences = async () => {
+    try {
+      const user = await getCurrentUser();
+      if (!user || user.role !== 'tenant' || !supabaseServiceRole) return;
+
+      const { data } = await supabaseServiceRole
+        .from('tenant_notification_preferences')
+        .select('email_notifications_enabled, low_battery_alerts')
+        .eq('tenant_id', user.id)
+        .maybeSingle();
+
+      if (data) {
+        setNotificationPreferences({
+          emailNotificationsEnabled: data.email_notifications_enabled,
+          lowBatteryAlerts: data.low_battery_alerts
+        });
+      }
+    } catch (error) {
+      console.error('Error loading notification preferences:', error);
+    }
+  };
+
+  const saveNotificationPreferences = async () => {
+    try {
+      setSavingNotifications(true);
+      const user = await getCurrentUser();
+      if (!user || user.role !== 'tenant' || !supabaseServiceRole) return;
+
+      const { error } = await supabaseServiceRole
+        .from('tenant_notification_preferences')
+        .upsert({
+          tenant_id: user.id,
+          email_notifications_enabled: notificationPreferences.emailNotificationsEnabled,
+          low_battery_alerts: notificationPreferences.lowBatteryAlerts,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'tenant_id' });
+
+      if (error) throw error;
+
+      alert('Notification preferences saved successfully!');
+    } catch (error) {
+      console.error('Error saving notification preferences:', error);
+      alert('Failed to save notification preferences');
+    } finally {
+      setSavingNotifications(false);
+    }
+  };
 
   const loadTenantCustomization = async () => {
     try {
@@ -305,61 +364,52 @@ export default function TenantSettings() {
         <label className="relative inline-flex items-center cursor-pointer">
           <input
             type="checkbox"
-            checked={settings.emailNotifications}
-            onChange={(e) => handleSettingChange('emailNotifications', e.target.checked)}
+            checked={notificationPreferences.emailNotificationsEnabled}
+            onChange={(e) => setNotificationPreferences(prev => ({ ...prev, emailNotificationsEnabled: e.target.checked }))}
             className="sr-only peer"
           />
           <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
         </label>
       </div>
-      
-      <div className="flex items-center justify-between">
+
+      <div className="flex items-center justify-between opacity-50">
         <div className="flex items-center space-x-3">
           <Phone className="h-5 w-5 text-gray-400" />
           <div>
             <p className="text-sm font-medium text-gray-700">SMS Alerts</p>
-            <p className="text-sm text-gray-500">Receive critical alerts via SMS</p>
+            <p className="text-sm text-gray-500">Coming soon</p>
           </div>
         </div>
-        <label className="relative inline-flex items-center cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.smsAlerts}
-            onChange={(e) => handleSettingChange('smsAlerts', e.target.checked)}
-            className="sr-only peer"
-          />
-          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+        <label className="relative inline-flex items-center cursor-not-allowed">
+          <input type="checkbox" disabled className="sr-only peer" />
+          <div className="w-11 h-6 bg-gray-200 rounded-full peer after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5"></div>
         </label>
       </div>
-      
+
       <div className="p-4 bg-blue-50 rounded-lg">
         <h4 className="text-sm font-medium text-blue-900 mb-3">Notification Preferences</h4>
         <div className="space-y-2">
           <label className="flex items-center">
-            <input 
-              type="checkbox" 
-              checked={settings.weeklyReports}
-              onChange={(e) => handleSettingChange('weeklyReports', e.target.checked)}
-              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" 
+            <input
+              type="checkbox"
+              checked={notificationPreferences.lowBatteryAlerts}
+              disabled={!notificationPreferences.emailNotificationsEnabled}
+              onChange={(e) => setNotificationPreferences(prev => ({ ...prev, lowBatteryAlerts: e.target.checked }))}
+              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
             />
-            <span className="ml-2 text-sm text-blue-700">Weekly usage reports</span>
-          </label>
-          <label className="flex items-center">
-            <input 
-              type="checkbox" 
-              checked={settings.maintenanceAlerts}
-              onChange={(e) => handleSettingChange('maintenanceAlerts', e.target.checked)}
-              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" 
-            />
-            <span className="ml-2 text-sm text-blue-700">Maintenance reminders</span>
-          </label>
-          <label className="flex items-center">
-            <input type="checkbox" className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
-            <span className="ml-2 text-sm text-blue-700">Device offline alerts</span>
-          </label>
-          <label className="flex items-center">
-            <input type="checkbox" className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
             <span className="ml-2 text-sm text-blue-700">Low battery warnings</span>
+          </label>
+          <label className="flex items-center opacity-50">
+            <input type="checkbox" disabled className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+            <span className="ml-2 text-sm text-blue-700">Weekly usage reports (coming soon)</span>
+          </label>
+          <label className="flex items-center opacity-50">
+            <input type="checkbox" disabled className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+            <span className="ml-2 text-sm text-blue-700">Maintenance reminders (coming soon)</span>
+          </label>
+          <label className="flex items-center opacity-50">
+            <input type="checkbox" disabled className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+            <span className="ml-2 text-sm text-blue-700">Device offline alerts (coming soon)</span>
           </label>
         </div>
       </div>
@@ -811,9 +861,13 @@ export default function TenantSettings() {
         </div>
 
         <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-end">
-          <button className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2">
+          <button
+            onClick={activeTab === 'notifications' ? saveNotificationPreferences : undefined}
+            disabled={activeTab === 'notifications' && savingNotifications}
+            className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2 disabled:opacity-50"
+          >
             <Save className="h-4 w-4" />
-            <span>Save Changes</span>
+            <span>{activeTab === 'notifications' && savingNotifications ? 'Saving...' : 'Save Changes'}</span>
           </button>
         </div>
       </div>

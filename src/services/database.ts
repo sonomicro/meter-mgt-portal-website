@@ -2,7 +2,6 @@ import { supabase, supabaseServiceRole, Database } from '../lib/supabase';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { getCurrentUser } from './auth';
 import { NotehubService } from './notehub';
-import type { WaterFlowData } from './notehub';
 
 type Tenant = Database['public']['Tables']['tenants']['Row'];
 type Device = Database['public']['Tables']['devices']['Row'];
@@ -828,74 +827,6 @@ export class DeviceDataService {
     return result;
   }
 
-  // Process water flow data from Notehub
-  static async processWaterFlowData(waterFlowData: WaterFlowData): Promise<void> {
-    // Find device by Notehub device ID
-    const { data: devices } = await supabase
-      .from('devices')
-      .select('id')
-      .eq('notehub_device_uid', waterFlowData.deviceId);
-
-    if (!devices || devices.length === 0) {
-      console.warn(`Device not found for Notehub ID: ${waterFlowData.deviceId}`);
-      return;
-    }
-
-    const device = devices[0];
-
-    // Add device data
-    await this.addDeviceData({
-      device_id: device.id,
-      timestamp: waterFlowData.timestamp,
-      flow_rate: waterFlowData.flowRate,
-      total_volume: waterFlowData.totalVolume,
-      temperature: waterFlowData.temperature,
-      pressure: waterFlowData.pressure,
-      battery_level: waterFlowData.batteryLevel
-    });
-
-    // Update device with latest values
-    await DeviceService.updateDevice(device.id, {
-      flow_rate: waterFlowData.flowRate,
-      total_usage: waterFlowData.totalVolume,
-      battery_level: waterFlowData.batteryLevel,
-      last_seen: waterFlowData.timestamp,
-      status: 'online'
-    });
-
-    // Check for alerts
-    await this.checkForAlerts(device.id, waterFlowData);
-  }
-
-  // Check for alerts based on device data
-  private static async checkForAlerts(deviceId: string, data: WaterFlowData): Promise<void> {
-    const alerts: Database['public']['Tables']['alerts']['Insert'][] = [];
-
-    // Low battery alert
-    if (data.batteryLevel && data.batteryLevel < 25) {
-      alerts.push({
-        device_id: deviceId,
-        type: 'low_battery',
-        message: `Battery level below 25% (${data.batteryLevel}%)`,
-        severity: data.batteryLevel < 10 ? 'high' : 'medium'
-      });
-    }
-
-    // High flow rate alert (potential leak)
-    if (data.flowRate > 100) { // Threshold can be configurable
-      alerts.push({
-        device_id: deviceId,
-        type: 'leak',
-        message: `Unusually high flow rate detected: ${data.flowRate}L/min`,
-        severity: 'high'
-      });
-    }
-
-    // Insert alerts if any
-    if (alerts.length > 0) {
-      await supabase.from('alerts').insert(alerts);
-    }
-  }
 }
 
 // Device Settings Service

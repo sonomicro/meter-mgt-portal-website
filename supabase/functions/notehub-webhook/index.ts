@@ -54,6 +54,30 @@ interface NotehubWebhookPayload {
   tower_lon?: number;
 }
 
+async function notifyAlert(alert: { id: string; device_id: string; type: string; severity: string; message: string }) {
+  try {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+
+    await fetch(`${supabaseUrl}/functions/v1/send-notification-email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${serviceRoleKey}`,
+      },
+      body: JSON.stringify({
+        alertId: alert.id,
+        deviceId: alert.device_id,
+        type: alert.type,
+        severity: alert.severity,
+        message: alert.message,
+      }),
+    })
+  } catch (error) {
+    console.error('Error dispatching alert notification email:', error)
+  }
+}
+
 Deno.serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -243,6 +267,62 @@ Deno.serve(async (req) => {
       }
 
       console.log(`Processed sensor data for device ${device.name}`)
+    }
+
+    // Handle battery telemetry
+    if (payload.file === 'battery.qo' && payload.body) {
+      const timestamp = new Date(payload.when * 1000).toISOString()
+      const socPct = payload.body.battery_soc_pct
+
+      if (typeof socPct === 'number') {
+        const { error: batteryUpdateError } = await supabaseClient
+          .from('devices')
+          .update({ battery_level: socPct, last_seen: timestamp })
+          .eq('id', device.id)
+
+        if (batteryUpdateError) {
+          console.error('Error updating device battery level:', batteryUpdateError)
+        }
+
+        const LOW_BATTERY_THRESHOLD = 25
+        const HIGH_SEVERITY_THRESHOLD = 10
+
+        if (socPct < LOW_BATTERY_THRESHOLD) {
+          const { data: existingAlert } = await supabaseClient
+            .from('alerts')
+            .select('id')
+            .eq('device_id', device.id)
+            .eq('type', 'low_battery')
+            .eq('resolved', false)
+            .maybeSingle()
+
+          if (!existingAlert) {
+            const severity = socPct < HIGH_SEVERITY_THRESHOLD ? 'high' : 'medium'
+            const message = `Battery level below ${LOW_BATTERY_THRESHOLD}% (${socPct}%)`
+
+            const { data: newAlert, error: alertError } = await supabaseClient
+              .from('alerts')
+              .insert({
+                device_id: device.id,
+                type: 'low_battery',
+                message,
+                severity,
+                created_at: timestamp
+              })
+              .select()
+              .single()
+
+            if (alertError) {
+              console.error('Error inserting low battery alert:', alertError)
+            } else {
+              console.log(`Created low battery alert for device ${device.name}: ${socPct}%`)
+              await notifyAlert(newAlert)
+            }
+          }
+        }
+      }
+
+      console.log(`Processed battery telemetry for device ${device.name}`)
     }
 
     // Track data usage for analytics
