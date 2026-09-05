@@ -1300,22 +1300,6 @@ export default function DeviceOverview() {
                       <span className="text-gray-600">Flow Rate Threshold:</span>
                       <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.flow_rate_threshold} L/min</span>
                     </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">Temperature Min:</span>
-                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.temperature_min}°C</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">Temperature Max:</span>
-                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.temperature_max}°C</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">Pressure Min:</span>
-                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.pressure_min} bar</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">Pressure Max:</span>
-                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.pressure_max} bar</span>
-                    </div>
                   </div>
                 </div>
               )}

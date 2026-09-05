@@ -31,8 +31,6 @@ export interface WaterUsage {
   timestamp: string;
   flowRate: number;
   totalVolume: number;
-  temperature?: number;
-  pressure?: number;
 }
 
 export interface Tenant {
@@ -55,7 +53,7 @@ export interface Tenant {
 export interface Alert {
   id: string;
   deviceId: string;
-  type: 'leak' | 'low_battery' | 'offline' | 'maintenance';
+  type: 'leak' | 'low_battery' | 'offline' | 'maintenance' | 'alarm' | 'low_signal';
   message: string;
   severity: 'low' | 'medium' | 'high';
   timestamp: string;

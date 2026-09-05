@@ -22,25 +22,25 @@ interface NotehubWebhookPayload {
   note: string;
   updates: number;
   body: {
-    flow_rate?: number;
-    total_volume?: number;
-    VolumeFlowRate?: number;
-    Totalizer?: number;
-    DeltaTOF?: number;
-    SampleNumber?: number;
-    SaturationFlowCount?: number;
-    TotalTOF_DNS?: number;
-    TotalTOF_UPS?: number;
-    temperature?: number;
-    pressure?: number;
+    // data.qo / sensors.qo (flow_sensor_controller.c, kv_app.h) — flat, dotted wire keys
+    'flow_sensor.1.volume_flow_rate'?: number;
+    'flow_sensor.1.totalizer'?: number;
+    'flow_sensor.1.delta_tof'?: number;
+    'flow_sensor.1.sample_number'?: number;
+    'flow_sensor.1.saturated_flow_count'?: number;
+    'flow_sensor.1.total_tof_dns'?: number;
+    'flow_sensor.1.total_tof_ups'?: number;
+    // battery.qo (battery_controller.c)
+    'battery.soc_pct'?: number;
+    'battery.voltage_mv'?: number;
+    // _health.qo (Notecard system health, not app telemetry)
     battery_level?: number;
     voltage?: number;
     temp?: number;
     bars?: number;
-    type?: string;
-    severity?: string;
+    // alarm.qo (cloud_sync.c) — firmware only ever sends these two
+    code?: number;
     message?: string;
-    description?: string;
     [key: string]: any;
   };
   where_olc?: string;
@@ -176,11 +176,9 @@ Deno.serve(async (req) => {
       // This is sensor data from the device
       const timestamp = new Date(payload.when * 1000).toISOString()
 
-      // Map data.qo fields to our schema
-      // VolumeFlowRate is in the data.qo body
-      // Totalizer represents total volume
-      const flowRate = payload.body.VolumeFlowRate || payload.body.flow_rate || 0;
-      const totalVolume = payload.body.Totalizer || payload.body.total_volume || 0;
+      // kv_app.h wire keys: flow_sensor.1.volume_flow_rate / flow_sensor.1.totalizer
+      const flowRate = payload.body['flow_sensor.1.volume_flow_rate'] || 0;
+      const totalVolume = payload.body['flow_sensor.1.totalizer'] || 0;
 
       // Insert device data record
       const { error: dataError } = await supabaseClient
@@ -189,10 +187,7 @@ Deno.serve(async (req) => {
           device_id: device.id,
           timestamp: timestamp,
           flow_rate: flowRate,
-          total_volume: totalVolume,
-          temperature: payload.body.temperature,
-          pressure: payload.body.pressure,
-          battery_level: payload.body.battery_level
+          total_volume: totalVolume
         })
 
       if (dataError) {
@@ -366,6 +361,26 @@ Deno.serve(async (req) => {
       console.log(`Updated health status for device ${device.name}`)
     }
 
+    // Handle app-level battery telemetry (battery_controller.c battery.qo)
+    if (payload.file === 'battery.qo' && payload.body['battery.soc_pct'] !== undefined) {
+      const timestamp = new Date(payload.when * 1000).toISOString()
+
+      const { error: updateError } = await supabaseClient
+        .from('devices')
+        .update({
+          status: 'online',
+          last_seen: timestamp,
+          battery_level: payload.body['battery.soc_pct']
+        })
+        .eq('id', device.id)
+
+      if (updateError) {
+        console.error('Error updating device battery:', updateError)
+      }
+
+      console.log(`Updated battery level for device ${device.name}: ${payload.body['battery.soc_pct']}%`)
+    }
+
     // Handle location updates
     if (payload.file === '_track.qo' && payload.where_lat && payload.where_lon) {
       const timestamp = new Date(payload.when * 1000).toISOString()
@@ -409,36 +424,15 @@ Deno.serve(async (req) => {
       console.log(`Updated session status for device ${device.name}: ${isConnecting ? 'online' : 'offline'}`)
     }
 
-    // Handle alarm events
+    // Handle alarm events (cloud_sync_raise_alarm — body only ever has `code` + optional `message`)
     if (payload.file === 'alarm.qo' && payload.body) {
       const timestamp = new Date(payload.when * 1000).toISOString()
-      
-      // Determine alert type and severity based on alarm data
-      let alertType = 'alarm';
-      let severity = 'medium';
-      let message = 'Device alarm triggered';
 
-      // Check for specific alarm conditions in the body
-      if (payload.body.type) {
-        alertType = payload.body.type;
-      }
-      if (payload.body.severity) {
-        severity = payload.body.severity;
-      }
-      if (payload.body.message) {
-        message = payload.body.message;
-      } else if (payload.body.description) {
-        message = payload.body.description;
-      } else {
-        // Construct message from available data
-        const alarmDetails = Object.entries(payload.body)
-          .filter(([key]) => !['type', 'severity'].includes(key))
-          .map(([key, value]) => `${key}: ${value}`)
-          .join(', ');
-        if (alarmDetails) {
-          message = `Alarm: ${alarmDetails}`;
-        }
-      }
+      const alertType = 'alarm';
+      const severity = 'medium';
+      const message = payload.body.message
+        ? `Alarm (code ${payload.body.code}): ${payload.body.message}`
+        : `Device alarm triggered (code ${payload.body.code})`;
 
       // Insert alert into database
       const { error: alertError } = await supabaseClient

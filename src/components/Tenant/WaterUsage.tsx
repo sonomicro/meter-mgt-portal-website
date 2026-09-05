@@ -139,7 +139,7 @@ export default function WaterUsage() {
       // Build query for device data
       let query = supabaseServiceRole
         .from('device_data')
-        .select('device_id, timestamp, total_volume')
+        .select('device_id, timestamp, flow_rate, total_volume, battery_level')
         .gte('timestamp', startDate.toISOString())
         .lte('timestamp', endDate.toISOString())
         .order('timestamp', { ascending: true });
@@ -358,17 +358,14 @@ export default function WaterUsage() {
         device_id: record.device_id,
         flow_rate: record.flow_rate,
         total_volume: record.total_volume,
-        temperature: record.temperature,
-        pressure: record.pressure,
-        battery_voltage: record.battery_voltage,
-        signal_strength: record.signal_strength
+        battery_level: record.battery_level
       };
     });
 
     if (format === 'csv') {
-      content = 'Timestamp,Device Name,Alias,Fleet Group,Device ID,Flow Rate (L/min),Total Volume (L),Temperature (°C),Pressure (bar),Battery Voltage (V),Signal Strength\n' +
+      content = 'Timestamp,Device Name,Alias,Fleet Group,Device ID,Flow Rate (L/min),Total Volume (L),Battery Level (%)\n' +
                 dataWithNames.map(d =>
-                  `${d.timestamp},${d.device_name},${d.device_alias},${d.fleet_group},${d.device_id},${d.flow_rate || 0},${d.total_volume || 0},${d.temperature || ''},${d.pressure || ''},${d.battery_voltage || ''},${d.signal_strength || ''}`
+                  `${d.timestamp},${d.device_name},${d.device_alias},${d.fleet_group},${d.device_id},${d.flow_rate || 0},${d.total_volume || 0},${d.battery_level ?? ''}`
                 ).join('\n');
       filename = `water-usage-full-resolution-${new Date().toISOString().split('T')[0]}.csv`;
     } else if (format === 'json') {
@@ -392,10 +389,7 @@ export default function WaterUsage() {
                   (d.fleet_group ? `  Fleet Group: ${d.fleet_group}\n` : '') +
                   `  Flow Rate: ${(d.flow_rate || 0).toFixed(2)} L/min\n` +
                   `  Total Volume: ${(d.total_volume || 0).toFixed(2)} L\n` +
-                  `  Temperature: ${d.temperature ? d.temperature.toFixed(1) + ' °C' : 'N/A'}\n` +
-                  `  Pressure: ${d.pressure ? d.pressure.toFixed(2) + ' bar' : 'N/A'}\n` +
-                  `  Battery: ${d.battery_voltage ? d.battery_voltage.toFixed(2) + ' V' : 'N/A'}\n` +
-                  `  Signal: ${d.signal_strength || 'N/A'}\n`
+                  `  Battery: ${d.battery_level != null ? d.battery_level + '%' : 'N/A'}\n`
                 ).join('\n');
       filename = `water-usage-report-${new Date().toISOString().split('T')[0]}.txt`;
     }
@@ -431,10 +425,7 @@ export default function WaterUsage() {
         fleet_group: fleetGroup?.name || '',
         flow_rate: record.flow_rate,
         total_volume: record.total_volume,
-        temperature: record.temperature,
-        pressure: record.pressure,
-        battery_voltage: record.battery_voltage,
-        signal_strength: record.signal_strength
+        battery_level: record.battery_level
       };
     });
 
@@ -471,8 +462,7 @@ export default function WaterUsage() {
                      `${d.timestamp} | ${d.device_name}\n` +
                      `  Flow: ${(d.flow_rate || 0).toFixed(2)} L/min | ` +
                      `Volume: ${(d.total_volume || 0).toFixed(2)} L | ` +
-                     `Temp: ${d.temperature ? d.temperature.toFixed(1) + '°C' : 'N/A'} | ` +
-                     `Pressure: ${d.pressure ? d.pressure.toFixed(2) + ' bar' : 'N/A'}\n`
+                     `Battery: ${d.battery_level != null ? d.battery_level + '%' : 'N/A'}\n`
                    ).join('\n') +
                    (dataWithNames.length > 100 ? `\n\n... and ${dataWithNames.length - 100} more records. Use Export function for complete data.\n` : '');
 
@@ -819,7 +809,7 @@ export default function WaterUsage() {
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Export Full Resolution Data</h3>
             <p className="text-sm text-gray-600 mb-4">
-              Export all data points with timestamps at device reporting intervals. Includes flow rate, temperature, pressure, battery, and signal strength for the selected period.
+              Export all data points with timestamps at device reporting intervals. Includes flow rate, total volume, and battery level for the selected period.
             </p>
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
               <p className="text-sm text-blue-800">
