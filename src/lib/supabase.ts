@@ -61,6 +61,7 @@ export interface Database {
           created_at: string;
           last_login: string | null;
           password_hash: string | null;
+          notehub_fleet_uid: string | null;
         };
         Insert: {
           id?: string;
@@ -74,6 +75,7 @@ export interface Database {
           created_at?: string;
           last_login?: string | null;
           password_hash?: string | null;
+          notehub_fleet_uid?: string | null;
         };
         Update: {
           id?: string;
@@ -87,6 +89,7 @@ export interface Database {
           created_at?: string;
           last_login?: string | null;
           password_hash?: string | null;
+          notehub_fleet_uid?: string | null;
         };
       };
       devices: {

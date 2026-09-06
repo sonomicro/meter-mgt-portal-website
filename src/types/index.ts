@@ -48,6 +48,7 @@ export interface Tenant {
   createdAt: string;
   lastLogin?: string;
   plan: 'basic' | 'professional' | 'enterprise';
+  notehub_fleet_uid?: string | null;
 }
 
 export interface Alert {
