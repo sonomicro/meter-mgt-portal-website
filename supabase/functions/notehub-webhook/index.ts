@@ -22,25 +22,37 @@ interface NotehubWebhookPayload {
   note: string;
   updates: number;
   body: {
-    // data.qo / sensors.qo (flow_sensor_controller.c, kv_app.h) — flat, dotted wire keys
-    'flow_sensor.1.volume_flow_rate'?: number;
-    'flow_sensor.1.totalizer'?: number;
-    'flow_sensor.1.delta_tof'?: number;
-    'flow_sensor.1.sample_number'?: number;
-    'flow_sensor.1.saturated_flow_count'?: number;
-    'flow_sensor.1.total_tof_dns'?: number;
-    'flow_sensor.1.total_tof_ups'?: number;
-    // battery.qo (battery_controller.c)
-    'battery.soc_pct'?: number;
-    'battery.voltage_mv'?: number;
+    // data.qo / sensors.qo — current firmware (kv_app.h keys, sanitized by
+    // data_serializer.c's sanitize_key() which replaces '.' with '_' on the wire)
+    flow_sensor_1_volume_flow_rate?: number;
+    flow_sensor_1_totalizer?: number;
+    flow_sensor_1_delta_tof?: number;
+    flow_sensor_1_sample_number?: number;
+    flow_sensor_1_saturated_flow_count?: number;
+    flow_sensor_1_total_tof_dns?: number;
+    flow_sensor_1_total_tof_ups?: number;
+    // data.qo — legacy firmware still live on some fleet devices (pre-kv_app.h
+    // data_serializer.c, flat PascalCase keys, no "flow_sensor.1." namespace)
+    VolumeFlowRate?: number;
+    Totalizer?: number;
+    DeltaTOF?: number;
+    SampleNumber?: number;
+    SaturationFlowCount?: number;
+    TotalTOF_DNS?: number;
+    TotalTOF_UPS?: number;
+    // battery.qo (battery_controller.c) — current firmware only
+    battery_soc_pct?: number;
+    battery_voltage_mv?: number;
     // _health.qo (Notecard system health, not app telemetry)
     battery_level?: number;
     voltage?: number;
     temp?: number;
     bars?: number;
-    // alarm.qo (cloud_sync.c) — firmware only ever sends these two
+    // alarm.qo — current firmware (cloud_sync_raise_alarm: flat { code, message })
     code?: number;
     message?: string;
+    // alarm.qo — legacy firmware seen sending a nested shape, e.g. { flow: { status, value } }
+    flow?: { status?: string; value?: number };
     [key: string]: any;
   };
   where_olc?: string;
@@ -176,9 +188,10 @@ Deno.serve(async (req) => {
       // This is sensor data from the device
       const timestamp = new Date(payload.when * 1000).toISOString()
 
-      // kv_app.h wire keys: flow_sensor.1.volume_flow_rate / flow_sensor.1.totalizer
-      const flowRate = payload.body['flow_sensor.1.volume_flow_rate'] || 0;
-      const totalVolume = payload.body['flow_sensor.1.totalizer'] || 0;
+      // Current firmware sends flow_sensor_1_* (kv_app.h, sanitized to underscores);
+      // some fleet devices still run older firmware that sends flat PascalCase keys.
+      const flowRate = payload.body.flow_sensor_1_volume_flow_rate ?? payload.body.VolumeFlowRate ?? 0;
+      const totalVolume = payload.body.flow_sensor_1_totalizer ?? payload.body.Totalizer ?? 0;
 
       // Insert device data record
       const { error: dataError } = await supabaseClient
@@ -362,7 +375,7 @@ Deno.serve(async (req) => {
     }
 
     // Handle app-level battery telemetry (battery_controller.c battery.qo)
-    if (payload.file === 'battery.qo' && payload.body['battery.soc_pct'] !== undefined) {
+    if (payload.file === 'battery.qo' && payload.body.battery_soc_pct !== undefined) {
       const timestamp = new Date(payload.when * 1000).toISOString()
 
       const { error: updateError } = await supabaseClient
@@ -370,7 +383,7 @@ Deno.serve(async (req) => {
         .update({
           status: 'online',
           last_seen: timestamp,
-          battery_level: payload.body['battery.soc_pct']
+          battery_level: payload.body.battery_soc_pct
         })
         .eq('id', device.id)
 
@@ -378,7 +391,7 @@ Deno.serve(async (req) => {
         console.error('Error updating device battery:', updateError)
       }
 
-      console.log(`Updated battery level for device ${device.name}: ${payload.body['battery.soc_pct']}%`)
+      console.log(`Updated battery level for device ${device.name}: ${payload.body.battery_soc_pct}%`)
     }
 
     // Handle location updates
@@ -424,15 +437,31 @@ Deno.serve(async (req) => {
       console.log(`Updated session status for device ${device.name}: ${isConnecting ? 'online' : 'offline'}`)
     }
 
-    // Handle alarm events (cloud_sync_raise_alarm — body only ever has `code` + optional `message`)
+    // Handle alarm events. Current firmware (cloud_sync_raise_alarm) sends a flat
+    // { code, message } body; some fleet devices still run older firmware that sends
+    // other shapes (e.g. a nested { flow: { status, value } }), so fall back to a
+    // generic dump for anything we don't specifically recognize.
     if (payload.file === 'alarm.qo' && payload.body) {
       const timestamp = new Date(payload.when * 1000).toISOString()
 
-      const alertType = 'alarm';
-      const severity = 'medium';
-      const message = payload.body.message
-        ? `Alarm (code ${payload.body.code}): ${payload.body.message}`
-        : `Device alarm triggered (code ${payload.body.code})`;
+      let alertType = 'alarm';
+      let severity = 'medium';
+      let message: string;
+
+      if (payload.body.code !== undefined) {
+        message = payload.body.message
+          ? `Alarm (code ${payload.body.code}): ${payload.body.message}`
+          : `Device alarm triggered (code ${payload.body.code})`;
+      } else if (payload.body.flow) {
+        alertType = 'leak';
+        severity = payload.body.flow.status === 'high' ? 'high' : 'medium';
+        message = `Flow ${payload.body.flow.status}: ${payload.body.flow.value}`;
+      } else {
+        const details = Object.entries(payload.body)
+          .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+          .join(', ');
+        message = details ? `Alarm: ${details}` : 'Device alarm triggered';
+      }
 
       // Insert alert into database
       const { error: alertError } = await supabaseClient
