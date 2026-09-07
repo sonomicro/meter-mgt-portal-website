@@ -224,6 +224,47 @@ export interface Database {
           resolved_at?: string | null;
         };
       };
+      leak_detection_settings: {
+        Row: {
+          id: string;
+          tenant_id: string;
+          device_id: string | null;
+          enabled: boolean;
+          flow_duration_threshold: number;
+          min_flow_rate_threshold: number;
+          no_flow_enabled: boolean;
+          no_flow_duration_threshold: number;
+          max_flow_rate_threshold: number;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          tenant_id: string;
+          device_id?: string | null;
+          enabled?: boolean;
+          flow_duration_threshold?: number;
+          min_flow_rate_threshold?: number;
+          no_flow_enabled?: boolean;
+          no_flow_duration_threshold?: number;
+          max_flow_rate_threshold?: number;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          tenant_id?: string;
+          device_id?: string | null;
+          enabled?: boolean;
+          flow_duration_threshold?: number;
+          min_flow_rate_threshold?: number;
+          no_flow_enabled?: boolean;
+          no_flow_duration_threshold?: number;
+          max_flow_rate_threshold?: number;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
       admins: {
         Row: {
           id: string;
