@@ -529,21 +529,28 @@ export default function TenantSettings() {
 
       const existingSetting = leakDetectionSettings.find(s => s.device_id === deviceId);
 
-      if (existingSetting) {
-        await supabaseServiceRole
-          .from('leak_detection_settings')
-          .update({ enabled })
-          .eq('id', existingSetting.id);
-      } else {
-        await supabaseServiceRole
-          .from('leak_detection_settings')
-          .insert({
-            tenant_id: user.id,
-            device_id: deviceId,
-            enabled,
-            flow_duration_threshold: globalLeakDetection.flowDurationThreshold,
-            min_flow_rate_threshold: globalLeakDetection.minFlowRateThreshold
-          });
+      const { error } = existingSetting
+        ? await supabaseServiceRole
+            .from('leak_detection_settings')
+            .update({ enabled })
+            .eq('id', existingSetting.id)
+        : await supabaseServiceRole
+            .from('leak_detection_settings')
+            .insert({
+              tenant_id: user.id,
+              device_id: deviceId,
+              enabled,
+              flow_duration_threshold: globalLeakDetection.flowDurationThreshold,
+              min_flow_rate_threshold: globalLeakDetection.minFlowRateThreshold,
+              no_flow_enabled: globalLeakDetection.noFlowEnabled,
+              no_flow_duration_threshold: globalLeakDetection.noFlowDurationThreshold,
+              max_flow_rate_threshold: globalLeakDetection.maxFlowRateThreshold
+            });
+
+      if (error) {
+        console.error('Error updating device leak detection:', error);
+        alert(`Failed to update leak detection: ${error.message}`);
+        return;
       }
 
       await loadDevicesAndSettings();
@@ -559,24 +566,28 @@ export default function TenantSettings() {
 
       const existingSetting = leakDetectionSettings.find(s => s.device_id === deviceId);
 
-      if (existingSetting) {
-        await supabaseServiceRole
-          .from('leak_detection_settings')
-          .update({ no_flow_enabled: noFlowEnabled })
-          .eq('id', existingSetting.id);
-      } else {
-        await supabaseServiceRole
-          .from('leak_detection_settings')
-          .insert({
-            tenant_id: user.id,
-            device_id: deviceId,
-            enabled: globalLeakDetection.enabled,
-            flow_duration_threshold: globalLeakDetection.flowDurationThreshold,
-            min_flow_rate_threshold: globalLeakDetection.minFlowRateThreshold,
-            no_flow_enabled: noFlowEnabled,
-            no_flow_duration_threshold: globalLeakDetection.noFlowDurationThreshold,
-            max_flow_rate_threshold: globalLeakDetection.maxFlowRateThreshold
-          });
+      const { error } = existingSetting
+        ? await supabaseServiceRole
+            .from('leak_detection_settings')
+            .update({ no_flow_enabled: noFlowEnabled })
+            .eq('id', existingSetting.id)
+        : await supabaseServiceRole
+            .from('leak_detection_settings')
+            .insert({
+              tenant_id: user.id,
+              device_id: deviceId,
+              enabled: globalLeakDetection.enabled,
+              flow_duration_threshold: globalLeakDetection.flowDurationThreshold,
+              min_flow_rate_threshold: globalLeakDetection.minFlowRateThreshold,
+              no_flow_enabled: noFlowEnabled,
+              no_flow_duration_threshold: globalLeakDetection.noFlowDurationThreshold,
+              max_flow_rate_threshold: globalLeakDetection.maxFlowRateThreshold
+            });
+
+      if (error) {
+        console.error('Error updating device no-flow detection:', error);
+        alert(`Failed to update no-flow detection: ${error.message}`);
+        return;
       }
 
       await loadDevicesAndSettings();
@@ -585,45 +596,51 @@ export default function TenantSettings() {
     }
   };
 
-  const saveDeviceLeakThresholds = async (deviceId: string) => {
+  const saveDeviceLeakThresholds = async (deviceId: string): Promise<boolean> => {
     try {
       const user = await getCurrentUser();
-      if (!user || !supabaseServiceRole) return;
+      if (!user || !supabaseServiceRole) return false;
 
       const edit = deviceThresholdEdits[deviceId];
-      if (!edit) return;
+      if (!edit) return false;
 
       const existingSetting = leakDetectionSettings.find(s => s.device_id === deviceId);
 
-      if (existingSetting) {
-        await supabaseServiceRole
-          .from('leak_detection_settings')
-          .update({
-            flow_duration_threshold: edit.flowDurationThreshold,
-            min_flow_rate_threshold: edit.minFlowRateThreshold,
-            no_flow_duration_threshold: edit.noFlowDurationThreshold,
-            max_flow_rate_threshold: edit.maxFlowRateThreshold
-          })
-          .eq('id', existingSetting.id);
-      } else {
-        await supabaseServiceRole
-          .from('leak_detection_settings')
-          .insert({
-            tenant_id: user.id,
-            device_id: deviceId,
-            enabled: globalLeakDetection.enabled,
-            flow_duration_threshold: edit.flowDurationThreshold,
-            min_flow_rate_threshold: edit.minFlowRateThreshold,
-            no_flow_enabled: globalLeakDetection.noFlowEnabled,
-            no_flow_duration_threshold: edit.noFlowDurationThreshold,
-            max_flow_rate_threshold: edit.maxFlowRateThreshold
-          });
+      const { error } = existingSetting
+        ? await supabaseServiceRole
+            .from('leak_detection_settings')
+            .update({
+              flow_duration_threshold: edit.flowDurationThreshold,
+              min_flow_rate_threshold: edit.minFlowRateThreshold,
+              no_flow_duration_threshold: edit.noFlowDurationThreshold,
+              max_flow_rate_threshold: edit.maxFlowRateThreshold
+            })
+            .eq('id', existingSetting.id)
+        : await supabaseServiceRole
+            .from('leak_detection_settings')
+            .insert({
+              tenant_id: user.id,
+              device_id: deviceId,
+              enabled: globalLeakDetection.enabled,
+              flow_duration_threshold: edit.flowDurationThreshold,
+              min_flow_rate_threshold: edit.minFlowRateThreshold,
+              no_flow_enabled: globalLeakDetection.noFlowEnabled,
+              no_flow_duration_threshold: edit.noFlowDurationThreshold,
+              max_flow_rate_threshold: edit.maxFlowRateThreshold
+            });
+
+      if (error) {
+        console.error('Error saving device leak thresholds:', error);
+        alert(`Failed to save device thresholds: ${error.message}`);
+        return false;
       }
 
       await loadDevicesAndSettings();
+      return true;
     } catch (error) {
       console.error('Error saving device leak thresholds:', error);
       alert('Failed to save device thresholds');
+      return false;
     }
   };
 
@@ -635,31 +652,35 @@ export default function TenantSettings() {
 
       const globalSetting = leakDetectionSettings.find(s => s.device_id === null);
 
-      if (globalSetting) {
-        await supabaseServiceRole
-          .from('leak_detection_settings')
-          .update({
-            enabled: globalLeakDetection.enabled,
-            flow_duration_threshold: globalLeakDetection.flowDurationThreshold,
-            min_flow_rate_threshold: globalLeakDetection.minFlowRateThreshold,
-            no_flow_enabled: globalLeakDetection.noFlowEnabled,
-            no_flow_duration_threshold: globalLeakDetection.noFlowDurationThreshold,
-            max_flow_rate_threshold: globalLeakDetection.maxFlowRateThreshold
-          })
-          .eq('id', globalSetting.id);
-      } else {
-        await supabaseServiceRole
-          .from('leak_detection_settings')
-          .insert({
-            tenant_id: user.id,
-            device_id: null,
-            enabled: globalLeakDetection.enabled,
-            flow_duration_threshold: globalLeakDetection.flowDurationThreshold,
-            min_flow_rate_threshold: globalLeakDetection.minFlowRateThreshold,
-            no_flow_enabled: globalLeakDetection.noFlowEnabled,
-            no_flow_duration_threshold: globalLeakDetection.noFlowDurationThreshold,
-            max_flow_rate_threshold: globalLeakDetection.maxFlowRateThreshold
-          });
+      const { error } = globalSetting
+        ? await supabaseServiceRole
+            .from('leak_detection_settings')
+            .update({
+              enabled: globalLeakDetection.enabled,
+              flow_duration_threshold: globalLeakDetection.flowDurationThreshold,
+              min_flow_rate_threshold: globalLeakDetection.minFlowRateThreshold,
+              no_flow_enabled: globalLeakDetection.noFlowEnabled,
+              no_flow_duration_threshold: globalLeakDetection.noFlowDurationThreshold,
+              max_flow_rate_threshold: globalLeakDetection.maxFlowRateThreshold
+            })
+            .eq('id', globalSetting.id)
+        : await supabaseServiceRole
+            .from('leak_detection_settings')
+            .insert({
+              tenant_id: user.id,
+              device_id: null,
+              enabled: globalLeakDetection.enabled,
+              flow_duration_threshold: globalLeakDetection.flowDurationThreshold,
+              min_flow_rate_threshold: globalLeakDetection.minFlowRateThreshold,
+              no_flow_enabled: globalLeakDetection.noFlowEnabled,
+              no_flow_duration_threshold: globalLeakDetection.noFlowDurationThreshold,
+              max_flow_rate_threshold: globalLeakDetection.maxFlowRateThreshold
+            });
+
+      if (error) {
+        console.error('Error saving global leak detection:', error);
+        alert(`Failed to save settings: ${error.message}`);
+        return;
       }
 
       await loadDevicesAndSettings();
@@ -781,34 +802,26 @@ export default function TenantSettings() {
             </label>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Flow Duration Threshold (hours)
-            </label>
-            <input
-              type="number"
-              min="1"
-              max="168"
-              value={globalLeakDetection.flowDurationThreshold}
-              onChange={(e) => setGlobalLeakDetection(prev => ({ ...prev, flowDurationThreshold: parseInt(e.target.value) }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            <p className="text-xs text-gray-500 mt-1">Alert after continuous flow for this many hours</p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Minimum Flow Rate (L/min)
-            </label>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-gray-700 bg-gray-50 rounded-lg p-3">
+            <span>If flow goes over</span>
             <input
               type="number"
               min="0"
               step="0.1"
               value={globalLeakDetection.minFlowRateThreshold}
               onChange={(e) => setGlobalLeakDetection(prev => ({ ...prev, minFlowRateThreshold: parseFloat(e.target.value) }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-20 px-2 py-1 border border-gray-300 rounded-md text-center focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
-            <p className="text-xs text-gray-500 mt-1">Only consider flow rates above this threshold</p>
+            <span>L/min and stays that way for</span>
+            <input
+              type="number"
+              min="1"
+              max="168"
+              value={globalLeakDetection.flowDurationThreshold}
+              onChange={(e) => setGlobalLeakDetection(prev => ({ ...prev, flowDurationThreshold: parseInt(e.target.value) }))}
+              className="w-20 px-2 py-1 border border-gray-300 rounded-md text-center focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <span>hours, raise a leak alert.</span>
           </div>
 
           <div className="border-t border-gray-200 pt-4 flex items-center justify-between">
@@ -827,34 +840,26 @@ export default function TenantSettings() {
             </label>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              No-Flow Duration Threshold (hours)
-            </label>
-            <input
-              type="number"
-              min="1"
-              max="168"
-              value={globalLeakDetection.noFlowDurationThreshold}
-              onChange={(e) => setGlobalLeakDetection(prev => ({ ...prev, noFlowDurationThreshold: parseInt(e.target.value) }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            <p className="text-xs text-gray-500 mt-1">Alert after flow stays at or below the floor for this many hours</p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Maximum Flow Rate for "No Flow" (L/min)
-            </label>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-gray-700 bg-gray-50 rounded-lg p-3">
+            <span>If flow goes below</span>
             <input
               type="number"
               min="0"
               step="0.1"
               value={globalLeakDetection.maxFlowRateThreshold}
               onChange={(e) => setGlobalLeakDetection(prev => ({ ...prev, maxFlowRateThreshold: parseFloat(e.target.value) }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-20 px-2 py-1 border border-gray-300 rounded-md text-center focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
-            <p className="text-xs text-gray-500 mt-1">Flow at or below this counts as "no flow"</p>
+            <span>L/min and stays that way for</span>
+            <input
+              type="number"
+              min="1"
+              max="168"
+              value={globalLeakDetection.noFlowDurationThreshold}
+              onChange={(e) => setGlobalLeakDetection(prev => ({ ...prev, noFlowDurationThreshold: parseInt(e.target.value) }))}
+              className="w-20 px-2 py-1 border border-gray-300 rounded-md text-center focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <span>hours, raise a no-flow alert.</span>
           </div>
 
           <button
@@ -922,29 +927,26 @@ export default function TenantSettings() {
                       <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                     </label>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Flow Duration Threshold (hours)</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="168"
-                        value={effectiveThreshold}
-                        onChange={(e) => setEdit({ flowDurationThreshold: parseInt(e.target.value) || 1 })}
-                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Minimum Flow Rate (L/min)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.1"
-                        value={effectiveMinRate}
-                        onChange={(e) => setEdit({ minFlowRateThreshold: parseFloat(e.target.value) || 0 })}
-                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      />
-                    </div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-gray-700 bg-gray-50 rounded-lg p-2">
+                    <span>If flow goes over</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={effectiveMinRate}
+                      onChange={(e) => setEdit({ minFlowRateThreshold: parseFloat(e.target.value) || 0 })}
+                      className="w-16 px-1.5 py-1 border border-gray-300 rounded-md text-center focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                    <span>L/min for</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="168"
+                      value={effectiveThreshold}
+                      onChange={(e) => setEdit({ flowDurationThreshold: parseInt(e.target.value) || 1 })}
+                      className="w-16 px-1.5 py-1 border border-gray-300 rounded-md text-center focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                    <span>hours, raise a leak alert.</span>
                   </div>
 
                   <div className="flex items-center justify-between border-t border-gray-100 pt-3">
@@ -959,41 +961,40 @@ export default function TenantSettings() {
                       <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                     </label>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">No-Flow Duration Threshold (hours)</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="168"
-                        value={effectiveNoFlowThreshold}
-                        onChange={(e) => setEdit({ noFlowDurationThreshold: parseInt(e.target.value) || 1 })}
-                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Max Flow Rate for "No Flow" (L/min)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.1"
-                        value={effectiveMaxFlowRate}
-                        onChange={(e) => setEdit({ maxFlowRateThreshold: parseFloat(e.target.value) || 0 })}
-                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      />
-                    </div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-gray-700 bg-gray-50 rounded-lg p-2">
+                    <span>If flow goes below</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={effectiveMaxFlowRate}
+                      onChange={(e) => setEdit({ maxFlowRateThreshold: parseFloat(e.target.value) || 0 })}
+                      className="w-16 px-1.5 py-1 border border-gray-300 rounded-md text-center focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                    <span>L/min for</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="168"
+                      value={effectiveNoFlowThreshold}
+                      onChange={(e) => setEdit({ noFlowDurationThreshold: parseInt(e.target.value) || 1 })}
+                      className="w-16 px-1.5 py-1 border border-gray-300 rounded-md text-center focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                    <span>hours, raise a no-flow alert.</span>
                   </div>
 
                   {edit && (
                     <div className="flex justify-end">
                       <button
-                        onClick={() => {
-                          saveDeviceLeakThresholds(device.id);
-                          setDeviceThresholdEdits(prev => {
-                            const next = { ...prev };
-                            delete next[device.id];
-                            return next;
-                          });
+                        onClick={async () => {
+                          const saved = await saveDeviceLeakThresholds(device.id);
+                          if (saved) {
+                            setDeviceThresholdEdits(prev => {
+                              const next = { ...prev };
+                              delete next[device.id];
+                              return next;
+                            });
+                          }
                         }}
                         className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition-colors"
                       >
