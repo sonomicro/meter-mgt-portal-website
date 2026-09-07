@@ -849,8 +849,6 @@ export class DeviceDataService {
       timestamp: waterFlowData.timestamp,
       flow_rate: waterFlowData.flowRate,
       total_volume: waterFlowData.totalVolume,
-      temperature: waterFlowData.temperature,
-      pressure: waterFlowData.pressure,
       battery_level: waterFlowData.batteryLevel
     });
 

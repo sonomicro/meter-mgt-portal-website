@@ -61,7 +61,9 @@ export default function DeviceOverview() {
     storage_store_interval: 5000,
     storage_base_timestamp: 0,
     system_main_loop_interval: 1000,
-    nfc_enabled: false
+    nfc_enabled: false,
+    cloud_sync_publish_interval: 300,
+    cloud_sync_request_interval: 60
   });
 
   useEffect(() => {
@@ -241,7 +243,9 @@ export default function DeviceOverview() {
         'storage.base.timestamp': newDevice.storage_base_timestamp,
         'system.main_loop_interval': newDevice.system_main_loop_interval,
         'nfc.enabled': newDevice.nfc_enabled,
-        'NFC.ENABLED': newDevice.nfc_enabled
+        'NFC.ENABLED': newDevice.nfc_enabled,
+        'cloud.sync.publish_interval_s': newDevice.cloud_sync_publish_interval,
+        'cloud.sync.request_interval_s': newDevice.cloud_sync_request_interval
       };
 
       const updates = {
@@ -331,7 +335,9 @@ export default function DeviceOverview() {
       storage_store_interval: config['storage.ringbuffer.store_interval_ms'] || 5000,
       storage_base_timestamp: config['storage.base.timestamp'] || 0,
       system_main_loop_interval: config['system.main_loop_interval'] || 1000,
-      nfc_enabled: config['nfc.enabled'] || config['NFC.ENABLED'] || false
+      nfc_enabled: config['nfc.enabled'] || config['NFC.ENABLED'] || false,
+      cloud_sync_publish_interval: config['cloud.sync.publish_interval_s'] || 300,
+      cloud_sync_request_interval: config['cloud.sync.request_interval_s'] || 60
     });
     setShowEditModal(true);
   };
@@ -1132,6 +1138,38 @@ export default function DeviceOverview() {
                 </div>
               </div>
 
+              {/* Cloud Sync Settings */}
+              <div className="mb-4 bg-purple-50 p-4 rounded-lg">
+                <h5 className="text-sm font-medium text-gray-900 mb-3 flex items-center">
+                  <Globe className="h-4 w-4 text-purple-600 mr-2" />
+                  Cloud Sync
+                </h5>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Publish Interval (s)</label>
+                    <input
+                      type="number"
+                      step="60"
+                      value={newDevice.cloud_sync_publish_interval}
+                      onChange={(e) => setNewDevice({...newDevice, cloud_sync_publish_interval: parseInt(e.target.value) || 300})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">How often the meter sends flow data to the cloud</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Request Interval (s)</label>
+                    <input
+                      type="number"
+                      step="60"
+                      value={newDevice.cloud_sync_request_interval}
+                      onChange={(e) => setNewDevice({...newDevice, cloud_sync_request_interval: parseInt(e.target.value) || 60})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">How often the meter checks in with the cloud for new settings</p>
+                  </div>
+                </div>
+              </div>
+
               {/* Storage & System Settings */}
               <div className="mb-4 bg-gray-50 p-4 rounded-lg">
                 <h5 className="text-sm font-medium text-gray-900 mb-3">Storage & System</h5>
@@ -1300,22 +1338,6 @@ export default function DeviceOverview() {
                       <span className="text-gray-600">Flow Rate Threshold:</span>
                       <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.flow_rate_threshold} L/min</span>
                     </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">Temperature Min:</span>
-                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.temperature_min}°C</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">Temperature Max:</span>
-                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.temperature_max}°C</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">Pressure Min:</span>
-                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.pressure_min} bar</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">Pressure Max:</span>
-                      <span className="text-gray-900 font-medium">{deviceSettings.alertConfig.pressure_max} bar</span>
-                    </div>
                   </div>
                 </div>
               )}
@@ -1430,6 +1452,20 @@ export default function DeviceOverview() {
                         <span className={`px-2 py-1 rounded text-xs font-medium ${deviceSettings.notehubConfig['settings.battery.armed'] ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
                           {deviceSettings.notehubConfig['settings.battery.armed'] ? 'Yes' : 'No'}
                         </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <p className="text-xs text-gray-600 mb-2 font-medium uppercase">Cloud Sync</p>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Publish Interval:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['cloud.sync.publish_interval_s']}s</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Request Interval:</span>
+                        <span className="text-gray-900 font-medium">{deviceSettings.notehubConfig['cloud.sync.request_interval_s']}s</span>
                       </div>
                     </div>
                   </div>

@@ -22,8 +22,17 @@ interface NotehubWebhookPayload {
   note: string;
   updates: number;
   body: {
-    flow_rate?: number;
-    total_volume?: number;
+    // data.qo / sensors.qo — current firmware (kv_app.h keys, sanitized by
+    // data_serializer.c's sanitize_key() which replaces '.' with '_' on the wire)
+    flow_sensor_1_volume_flow_rate?: number;
+    flow_sensor_1_totalizer?: number;
+    flow_sensor_1_delta_tof?: number;
+    flow_sensor_1_sample_number?: number;
+    flow_sensor_1_saturated_flow_count?: number;
+    flow_sensor_1_total_tof_dns?: number;
+    flow_sensor_1_total_tof_ups?: number;
+    // data.qo — legacy firmware still live on some fleet devices (pre-kv_app.h
+    // data_serializer.c, flat PascalCase keys, no "flow_sensor.1." namespace)
     VolumeFlowRate?: number;
     Totalizer?: number;
     DeltaTOF?: number;
@@ -31,16 +40,19 @@ interface NotehubWebhookPayload {
     SaturationFlowCount?: number;
     TotalTOF_DNS?: number;
     TotalTOF_UPS?: number;
-    temperature?: number;
-    pressure?: number;
+    // battery.qo (battery_controller.c) — current firmware only
+    battery_soc_pct?: number;
+    battery_voltage_mv?: number;
+    // _health.qo (Notecard system health, not app telemetry)
     battery_level?: number;
     voltage?: number;
     temp?: number;
     bars?: number;
-    type?: string;
-    severity?: string;
+    // alarm.qo — current firmware (cloud_sync_raise_alarm: flat { code, message })
+    code?: number;
     message?: string;
-    description?: string;
+    // alarm.qo — legacy firmware seen sending a nested shape, e.g. { flow: { status, value } }
+    flow?: { status?: string; value?: number };
     [key: string]: any;
   };
   where_olc?: string;
@@ -176,11 +188,10 @@ Deno.serve(async (req) => {
       // This is sensor data from the device
       const timestamp = new Date(payload.when * 1000).toISOString()
 
-      // Map data.qo fields to our schema
-      // VolumeFlowRate is in the data.qo body
-      // Totalizer represents total volume
-      const flowRate = payload.body.VolumeFlowRate || payload.body.flow_rate || 0;
-      const totalVolume = payload.body.Totalizer || payload.body.total_volume || 0;
+      // Current firmware sends flow_sensor_1_* (kv_app.h, sanitized to underscores);
+      // some fleet devices still run older firmware that sends flat PascalCase keys.
+      const flowRate = payload.body.flow_sensor_1_volume_flow_rate ?? payload.body.VolumeFlowRate ?? 0;
+      const totalVolume = payload.body.flow_sensor_1_totalizer ?? payload.body.Totalizer ?? 0;
 
       // Insert device data record
       const { error: dataError } = await supabaseClient
@@ -189,10 +200,7 @@ Deno.serve(async (req) => {
           device_id: device.id,
           timestamp: timestamp,
           flow_rate: flowRate,
-          total_volume: totalVolume,
-          temperature: payload.body.temperature,
-          pressure: payload.body.pressure,
-          battery_level: payload.body.battery_level
+          total_volume: totalVolume
         })
 
       if (dataError) {
@@ -366,6 +374,26 @@ Deno.serve(async (req) => {
       console.log(`Updated health status for device ${device.name}`)
     }
 
+    // Handle app-level battery telemetry (battery_controller.c battery.qo)
+    if (payload.file === 'battery.qo' && payload.body.battery_soc_pct !== undefined) {
+      const timestamp = new Date(payload.when * 1000).toISOString()
+
+      const { error: updateError } = await supabaseClient
+        .from('devices')
+        .update({
+          status: 'online',
+          last_seen: timestamp,
+          battery_level: payload.body.battery_soc_pct
+        })
+        .eq('id', device.id)
+
+      if (updateError) {
+        console.error('Error updating device battery:', updateError)
+      }
+
+      console.log(`Updated battery level for device ${device.name}: ${payload.body.battery_soc_pct}%`)
+    }
+
     // Handle location updates
     if (payload.file === '_track.qo' && payload.where_lat && payload.where_lon) {
       const timestamp = new Date(payload.when * 1000).toISOString()
@@ -409,35 +437,30 @@ Deno.serve(async (req) => {
       console.log(`Updated session status for device ${device.name}: ${isConnecting ? 'online' : 'offline'}`)
     }
 
-    // Handle alarm events
+    // Handle alarm events. Current firmware (cloud_sync_raise_alarm) sends a flat
+    // { code, message } body; some fleet devices still run older firmware that sends
+    // other shapes (e.g. a nested { flow: { status, value } }), so fall back to a
+    // generic dump for anything we don't specifically recognize.
     if (payload.file === 'alarm.qo' && payload.body) {
       const timestamp = new Date(payload.when * 1000).toISOString()
-      
-      // Determine alert type and severity based on alarm data
+
       let alertType = 'alarm';
       let severity = 'medium';
-      let message = 'Device alarm triggered';
+      let message: string;
 
-      // Check for specific alarm conditions in the body
-      if (payload.body.type) {
-        alertType = payload.body.type;
-      }
-      if (payload.body.severity) {
-        severity = payload.body.severity;
-      }
-      if (payload.body.message) {
-        message = payload.body.message;
-      } else if (payload.body.description) {
-        message = payload.body.description;
+      if (payload.body.code !== undefined) {
+        message = payload.body.message
+          ? `Alarm (code ${payload.body.code}): ${payload.body.message}`
+          : `Device alarm triggered (code ${payload.body.code})`;
+      } else if (payload.body.flow) {
+        alertType = 'leak';
+        severity = payload.body.flow.status === 'high' ? 'high' : 'medium';
+        message = `Flow ${payload.body.flow.status}: ${payload.body.flow.value}`;
       } else {
-        // Construct message from available data
-        const alarmDetails = Object.entries(payload.body)
-          .filter(([key]) => !['type', 'severity'].includes(key))
-          .map(([key, value]) => `${key}: ${value}`)
+        const details = Object.entries(payload.body)
+          .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
           .join(', ');
-        if (alarmDetails) {
-          message = `Alarm: ${alarmDetails}`;
-        }
+        message = details ? `Alarm: ${details}` : 'Device alarm triggered';
       }
 
       // Insert alert into database

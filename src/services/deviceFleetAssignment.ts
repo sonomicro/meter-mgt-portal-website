@@ -1,5 +1,5 @@
 import { NotehubService } from './notehub';
-import { DeviceService } from './database';
+import { DeviceService, TenantService } from './database';
 
 export interface FleetAssignmentResult {
   success: boolean;
@@ -20,16 +20,26 @@ export class DeviceFleetAssignmentService {
 
     if (NotehubService.isConfigured()) {
       try {
-        const fleets = await NotehubService.getFleets();
-        const targetFleet = fleets.find(f => f.label === tenantCompany);
+        const tenant = await TenantService.getTenant(tenantId);
+        targetFleetUid = tenant?.notehub_fleet_uid ?? null;
 
-        if (targetFleet) {
-          targetFleetUid = targetFleet.uid;
-          console.log(`✅ Found existing fleet for "${tenantCompany}": ${targetFleetUid}`);
+        if (targetFleetUid) {
+          console.log(`✅ Using tenant's stored fleet for "${tenantCompany}": ${targetFleetUid}`);
         } else {
-          const newFleet = await NotehubService.createFleet(tenantCompany);
-          targetFleetUid = newFleet.uid;
-          console.log(`✅ Created new fleet for "${tenantCompany}": ${targetFleetUid}`);
+          const fleets = await NotehubService.getFleets();
+          const targetFleet = fleets.find(f => f.label === tenantCompany);
+
+          if (targetFleet) {
+            targetFleetUid = targetFleet.uid;
+            console.log(`✅ Found existing fleet for "${tenantCompany}": ${targetFleetUid}`);
+          } else {
+            const newFleet = await NotehubService.createFleet(tenantCompany);
+            targetFleetUid = newFleet.uid;
+            console.log(`✅ Created new fleet for "${tenantCompany}": ${targetFleetUid}`);
+          }
+
+          await TenantService.updateTenant(tenantId, { notehub_fleet_uid: targetFleetUid });
+          console.log(`✅ Stored resolved fleet uid on tenant ${tenantId}`);
         }
       } catch (err) {
         console.error('Failed to prepare fleet:', err);

@@ -165,8 +165,6 @@ export interface WaterFlowData {
   timestamp: string;
   flowRate: number;
   totalVolume: number;
-  temperature?: number;
-  pressure?: number;
   batteryLevel?: number;
   location?: {
     lat: number;

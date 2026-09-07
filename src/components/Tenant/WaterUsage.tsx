@@ -35,6 +35,14 @@ interface LeakAlert {
   lastSeen: string;
 }
 
+interface NoFlowAlert {
+  deviceId: string;
+  deviceName: string;
+  duration: number;
+  avgFlowRate: number;
+  lastSeen: string;
+}
+
 interface LeakDetectionSetting {
   id: string;
   tenant_id: string;
@@ -42,6 +50,9 @@ interface LeakDetectionSetting {
   enabled: boolean;
   flow_duration_threshold: number;
   min_flow_rate_threshold: number;
+  no_flow_enabled: boolean;
+  no_flow_duration_threshold: number;
+  max_flow_rate_threshold: number;
 }
 
 export default function WaterUsage() {
@@ -56,6 +67,7 @@ export default function WaterUsage() {
   const [deviceUsageBreakdown, setDeviceUsageBreakdown] = useState<DeviceUsagePercent[]>([]);
   const [hourlyPatterns, setHourlyPatterns] = useState<HourlyPattern[]>([]);
   const [leakAlerts, setLeakAlerts] = useState<LeakAlert[]>([]);
+  const [noFlowAlerts, setNoFlowAlerts] = useState<NoFlowAlert[]>([]);
   const [leakDetectionSettings, setLeakDetectionSettings] = useState<LeakDetectionSetting[]>([]);
   const [kpiData, setKpiData] = useState({
     peakUsage: 0,
@@ -139,7 +151,7 @@ export default function WaterUsage() {
       // Build query for device data
       let query = supabaseServiceRole
         .from('device_data')
-        .select('device_id, timestamp, total_volume')
+        .select('device_id, timestamp, flow_rate, total_volume, battery_level')
         .gte('timestamp', startDate.toISOString())
         .lte('timestamp', endDate.toISOString())
         .order('timestamp', { ascending: true });
@@ -264,23 +276,31 @@ export default function WaterUsage() {
 
       // Detect potential leaks (continuous flow for extended periods) - only if enabled
       const leaks: LeakAlert[] = [];
+      // Detect stoppages (flow at/below a floor for extended periods) - only if enabled
+      const noFlows: NoFlowAlert[] = [];
 
       // Get global setting (device_id is null) or use default
       const globalSetting = (leakSettings || []).find(s => s.device_id === null);
       const defaultThreshold = globalSetting?.flow_duration_threshold || 6;
       const defaultMinFlowRate = globalSetting?.min_flow_rate_threshold || 1.0;
       const globalEnabled = globalSetting?.enabled !== false;
+      const defaultNoFlowThreshold = globalSetting?.no_flow_duration_threshold || 1;
+      const defaultMaxFlowRate = globalSetting?.max_flow_rate_threshold ?? 0.1;
+      const globalNoFlowEnabled = globalSetting?.no_flow_enabled !== false;
 
       for (const device of userDevices) {
         // Check device-specific settings, fall back to global
         const deviceSetting = (leakSettings || []).find(s => s.device_id === device.id);
         const isEnabled = deviceSetting ? deviceSetting.enabled : globalEnabled;
+        const isNoFlowEnabled = deviceSetting ? deviceSetting.no_flow_enabled : globalNoFlowEnabled;
 
-        // Skip if leak detection is disabled for this device
-        if (!isEnabled) continue;
+        // Skip if neither check applies to this device
+        if (!isEnabled && !isNoFlowEnabled) continue;
 
         const threshold = deviceSetting?.flow_duration_threshold || defaultThreshold;
         const minFlowRate = deviceSetting?.min_flow_rate_threshold || defaultMinFlowRate;
+        const noFlowThreshold = deviceSetting?.no_flow_duration_threshold || defaultNoFlowThreshold;
+        const maxFlowRate = deviceSetting?.max_flow_rate_threshold ?? defaultMaxFlowRate;
 
         const deviceRecords = (hourlyData || [])
           .filter((r: any) => r.device_id === device.id)
@@ -288,32 +308,63 @@ export default function WaterUsage() {
 
         let continuousFlowCount = 0;
         let totalFlow = 0;
+        let noFlowCount = 0;
+        let totalNoFlow = 0;
+        let leakFound = false;
+        let noFlowFound = false;
 
         for (const record of deviceRecords) {
           const flow = Number(record.flow_rate) || 0;
-          if (flow >= minFlowRate) {
-            continuousFlowCount++;
-            totalFlow += flow;
-          } else {
-            continuousFlowCount = 0;
-            totalFlow = 0;
+
+          if (isEnabled && !leakFound) {
+            if (flow >= minFlowRate) {
+              continuousFlowCount++;
+              totalFlow += flow;
+            } else {
+              continuousFlowCount = 0;
+              totalFlow = 0;
+            }
+
+            // Alert if continuous flow exceeds threshold
+            if (continuousFlowCount >= threshold) {
+              leaks.push({
+                deviceId: device.id,
+                deviceName: device.name,
+                duration: continuousFlowCount,
+                avgFlowRate: totalFlow / continuousFlowCount,
+                lastSeen: device.last_seen || ''
+              });
+              leakFound = true;
+            }
           }
 
-          // Alert if continuous flow exceeds threshold
-          if (continuousFlowCount >= threshold) {
-            const avgFlow = totalFlow / continuousFlowCount;
-            leaks.push({
-              deviceId: device.id,
-              deviceName: device.name,
-              duration: continuousFlowCount,
-              avgFlowRate: avgFlow,
-              lastSeen: device.last_seen || ''
-            });
-            break;
+          if (isNoFlowEnabled && !noFlowFound) {
+            if (flow <= maxFlowRate) {
+              noFlowCount++;
+              totalNoFlow += flow;
+            } else {
+              noFlowCount = 0;
+              totalNoFlow = 0;
+            }
+
+            // Alert if flow stays at/below the floor for too long
+            if (noFlowCount >= noFlowThreshold) {
+              noFlows.push({
+                deviceId: device.id,
+                deviceName: device.name,
+                duration: noFlowCount,
+                avgFlowRate: totalNoFlow / noFlowCount,
+                lastSeen: device.last_seen || ''
+              });
+              noFlowFound = true;
+            }
           }
+
+          if (leakFound && noFlowFound) break;
         }
       }
       setLeakAlerts(leaks);
+      setNoFlowAlerts(noFlows);
 
     } catch (error) {
       console.error('Error loading data:', error);
@@ -358,17 +409,14 @@ export default function WaterUsage() {
         device_id: record.device_id,
         flow_rate: record.flow_rate,
         total_volume: record.total_volume,
-        temperature: record.temperature,
-        pressure: record.pressure,
-        battery_voltage: record.battery_voltage,
-        signal_strength: record.signal_strength
+        battery_level: record.battery_level
       };
     });
 
     if (format === 'csv') {
-      content = 'Timestamp,Device Name,Alias,Fleet Group,Device ID,Flow Rate (L/min),Total Volume (L),Temperature (°C),Pressure (bar),Battery Voltage (V),Signal Strength\n' +
+      content = 'Timestamp,Device Name,Alias,Fleet Group,Device ID,Flow Rate (L/min),Total Volume (L),Battery Level (%)\n' +
                 dataWithNames.map(d =>
-                  `${d.timestamp},${d.device_name},${d.device_alias},${d.fleet_group},${d.device_id},${d.flow_rate || 0},${d.total_volume || 0},${d.temperature || ''},${d.pressure || ''},${d.battery_voltage || ''},${d.signal_strength || ''}`
+                  `${d.timestamp},${d.device_name},${d.device_alias},${d.fleet_group},${d.device_id},${d.flow_rate || 0},${d.total_volume || 0},${d.battery_level ?? ''}`
                 ).join('\n');
       filename = `water-usage-full-resolution-${new Date().toISOString().split('T')[0]}.csv`;
     } else if (format === 'json') {
@@ -392,10 +440,7 @@ export default function WaterUsage() {
                   (d.fleet_group ? `  Fleet Group: ${d.fleet_group}\n` : '') +
                   `  Flow Rate: ${(d.flow_rate || 0).toFixed(2)} L/min\n` +
                   `  Total Volume: ${(d.total_volume || 0).toFixed(2)} L\n` +
-                  `  Temperature: ${d.temperature ? d.temperature.toFixed(1) + ' °C' : 'N/A'}\n` +
-                  `  Pressure: ${d.pressure ? d.pressure.toFixed(2) + ' bar' : 'N/A'}\n` +
-                  `  Battery: ${d.battery_voltage ? d.battery_voltage.toFixed(2) + ' V' : 'N/A'}\n` +
-                  `  Signal: ${d.signal_strength || 'N/A'}\n`
+                  `  Battery: ${d.battery_level != null ? d.battery_level + '%' : 'N/A'}\n`
                 ).join('\n');
       filename = `water-usage-report-${new Date().toISOString().split('T')[0]}.txt`;
     }
@@ -431,10 +476,7 @@ export default function WaterUsage() {
         fleet_group: fleetGroup?.name || '',
         flow_rate: record.flow_rate,
         total_volume: record.total_volume,
-        temperature: record.temperature,
-        pressure: record.pressure,
-        battery_voltage: record.battery_voltage,
-        signal_strength: record.signal_strength
+        battery_level: record.battery_level
       };
     });
 
@@ -471,8 +513,7 @@ export default function WaterUsage() {
                      `${d.timestamp} | ${d.device_name}\n` +
                      `  Flow: ${(d.flow_rate || 0).toFixed(2)} L/min | ` +
                      `Volume: ${(d.total_volume || 0).toFixed(2)} L | ` +
-                     `Temp: ${d.temperature ? d.temperature.toFixed(1) + '°C' : 'N/A'} | ` +
-                     `Pressure: ${d.pressure ? d.pressure.toFixed(2) + ' bar' : 'N/A'}\n`
+                     `Battery: ${d.battery_level != null ? d.battery_level + '%' : 'N/A'}\n`
                    ).join('\n') +
                    (dataWithNames.length > 100 ? `\n\n... and ${dataWithNames.length - 100} more records. Use Export function for complete data.\n` : '');
 
@@ -636,6 +677,36 @@ export default function WaterUsage() {
                         </p>
                       </div>
                       <button className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors">
+                        Investigate
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* No Flow Alerts */}
+          {noFlowAlerts.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-6">
+              <div className="flex items-center mb-4">
+                <AlertTriangle className="h-5 w-5 text-amber-600 mr-2" />
+                <h3 className="text-lg font-semibold text-amber-900">No Flow Detected</h3>
+              </div>
+              <div className="space-y-3">
+                {noFlowAlerts.map(alert => (
+                  <div key={alert.deviceId} className="bg-white rounded-lg p-4 border border-amber-200">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium text-gray-900">{alert.deviceName}</p>
+                        <p className="text-sm text-gray-600">
+                          Flow at or below the minimum for {alert.duration}+ hours
+                        </p>
+                        <p className="text-sm text-gray-500">
+                          Average flow rate: {alert.avgFlowRate.toFixed(2)} L/min
+                        </p>
+                      </div>
+                      <button className="bg-amber-600 text-white px-4 py-2 rounded-lg hover:bg-amber-700 transition-colors">
                         Investigate
                       </button>
                     </div>
@@ -819,7 +890,7 @@ export default function WaterUsage() {
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Export Full Resolution Data</h3>
             <p className="text-sm text-gray-600 mb-4">
-              Export all data points with timestamps at device reporting intervals. Includes flow rate, temperature, pressure, battery, and signal strength for the selected period.
+              Export all data points with timestamps at device reporting intervals. Includes flow rate, total volume, and battery level for the selected period.
             </p>
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
               <p className="text-sm text-blue-800">
