@@ -39,6 +39,7 @@ export default function TenantSettings() {
   const [loading, setLoading] = useState(false);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [deviceThresholdEdits, setDeviceThresholdEdits] = useState<Record<string, { flowDurationThreshold: number; minFlowRateThreshold: number }>>({});
 
   useEffect(() => {
     loadDevicesAndSettings();
@@ -540,6 +541,43 @@ export default function TenantSettings() {
     }
   };
 
+  const saveDeviceLeakThresholds = async (deviceId: string) => {
+    try {
+      const user = await getCurrentUser();
+      if (!user || !supabaseServiceRole) return;
+
+      const edit = deviceThresholdEdits[deviceId];
+      if (!edit) return;
+
+      const existingSetting = leakDetectionSettings.find(s => s.device_id === deviceId);
+
+      if (existingSetting) {
+        await supabaseServiceRole
+          .from('leak_detection_settings')
+          .update({
+            flow_duration_threshold: edit.flowDurationThreshold,
+            min_flow_rate_threshold: edit.minFlowRateThreshold
+          })
+          .eq('id', existingSetting.id);
+      } else {
+        await supabaseServiceRole
+          .from('leak_detection_settings')
+          .insert({
+            tenant_id: user.id,
+            device_id: deviceId,
+            enabled: globalLeakDetection.enabled,
+            flow_duration_threshold: edit.flowDurationThreshold,
+            min_flow_rate_threshold: edit.minFlowRateThreshold
+          });
+      }
+
+      await loadDevicesAndSettings();
+    } catch (error) {
+      console.error('Error saving device leak thresholds:', error);
+      alert('Failed to save device thresholds');
+    }
+  };
+
   const saveGlobalLeakDetection = async () => {
     try {
       setLoading(true);
@@ -739,22 +777,80 @@ export default function TenantSettings() {
             {devices.map(device => {
               const deviceSetting = leakDetectionSettings.find(s => s.device_id === device.id);
               const isEnabled = deviceSetting ? deviceSetting.enabled : globalLeakDetection.enabled;
+              const edit = deviceThresholdEdits[device.id];
+              const effectiveThreshold = edit?.flowDurationThreshold ?? deviceSetting?.flow_duration_threshold ?? globalLeakDetection.flowDurationThreshold;
+              const effectiveMinRate = edit?.minFlowRateThreshold ?? (deviceSetting ? Number(deviceSetting.min_flow_rate_threshold) : globalLeakDetection.minFlowRateThreshold);
+
+              const setEdit = (updates: Partial<{ flowDurationThreshold: number; minFlowRateThreshold: number }>) => {
+                setDeviceThresholdEdits(prev => ({
+                  ...prev,
+                  [device.id]: {
+                    flowDurationThreshold: effectiveThreshold,
+                    minFlowRateThreshold: effectiveMinRate,
+                    ...prev[device.id],
+                    ...updates
+                  }
+                }));
+              };
 
               return (
-                <div key={device.id} className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{device.name}</p>
-                    <p className="text-xs text-gray-500">{device.location}</p>
+                <div key={device.id} className="p-3 border border-gray-200 rounded-lg space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{device.name}</p>
+                      <p className="text-xs text-gray-500">{device.location}</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isEnabled}
+                        onChange={(e) => toggleDeviceLeakDetection(device.id, e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
                   </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={isEnabled}
-                      onChange={(e) => toggleDeviceLeakDetection(device.id, e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Flow Duration Threshold (hours)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="168"
+                        value={effectiveThreshold}
+                        onChange={(e) => setEdit({ flowDurationThreshold: parseInt(e.target.value) || 1 })}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Minimum Flow Rate (L/min)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={effectiveMinRate}
+                        onChange={(e) => setEdit({ minFlowRateThreshold: parseFloat(e.target.value) || 0 })}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                  </div>
+                  {edit && (
+                    <div className="flex justify-end">
+                      <button
+                        onClick={() => {
+                          saveDeviceLeakThresholds(device.id);
+                          setDeviceThresholdEdits(prev => {
+                            const next = { ...prev };
+                            delete next[device.id];
+                            return next;
+                          });
+                        }}
+                        className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition-colors"
+                      >
+                        Save Thresholds
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}
