@@ -43,6 +43,8 @@ interface NotehubWebhookPayload {
     // battery.qo (battery_controller.c) — current firmware only
     battery_soc_pct?: number;
     battery_voltage_mv?: number;
+    // settings.qo (settings_controller.c) — compact device identity for NFC
+    settings_nfc_short_id?: number;
     // _health.qo (Notecard system health, not app telemetry)
     battery_level?: number;
     voltage?: number;
@@ -392,6 +394,26 @@ Deno.serve(async (req) => {
       }
 
       console.log(`Updated battery level for device ${device.name}: ${payload.body.battery_soc_pct}%`)
+    }
+
+    // Handle settings telemetry (settings_controller.c settings.qo) — currently
+    // only carries nfc_short_id, the compact device identity the NFC snapshot
+    // landing page and record-nfc-tap use to find this device without a login.
+    // Stored verbatim: the firmware computes it once (crc32 of the Notecard
+    // UID), so there is no second implementation here to drift out of sync.
+    if (payload.file === 'settings.qo' && payload.body.settings_nfc_short_id !== undefined) {
+      const { error: updateError } = await supabaseClient
+        .from('devices')
+        .update({
+          nfc_short_id: payload.body.settings_nfc_short_id
+        })
+        .eq('id', device.id)
+
+      if (updateError) {
+        console.error('Error updating device nfc_short_id:', updateError)
+      }
+
+      console.log(`Updated nfc_short_id for device ${device.name}: ${payload.body.settings_nfc_short_id}`)
     }
 
     // Handle location updates
