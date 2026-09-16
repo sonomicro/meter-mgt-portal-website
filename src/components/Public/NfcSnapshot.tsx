@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Droplets, Activity, BatteryFull, BatteryLow, AlertTriangle, Power, Gauge } from 'lucide-react';
+import { Droplets, Activity, BatteryFull, BatteryLow, AlertTriangle, Power, Gauge, LogIn } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
 /**
@@ -218,6 +218,14 @@ export default function NfcSnapshot() {
         <p className="text-center text-xs text-gray-400 mt-6">
           {formatCaptureTime(data.captureTimeS)}
         </p>
+
+        <a
+          href="/"
+          className="mt-6 w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+        >
+          <LogIn className="w-4 h-4" />
+          Log in to portal
+        </a>
       </div>
     </div>
   );
