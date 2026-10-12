@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, Settings, Wifi, WifiOff, Battery, MapPin, AlertTriangle, Activity, Database as DatabaseIcon, Globe, CreditCard as Edit, Trash2, UserPlus, Eye } from 'lucide-react';
+import { EnvironmentCell } from '../Shared/DeviceTelemetry';
 import { DeviceService, TenantService } from '../../services/database';
 import { DeviceFleetAssignmentService } from '../../services/deviceFleetAssignment';
 import { supabaseServiceRole } from '../../lib/supabase';
@@ -765,6 +766,7 @@ export default function DeviceOverview() {
                   <th className="text-left py-3 px-6 font-medium text-gray-900">Location</th>
                   <th className="text-left py-3 px-6 font-medium text-gray-900">Battery</th>
                   <th className="text-left py-3 px-6 font-medium text-gray-900">Last Seen</th>
+                  <th className="text-left py-3 px-6 font-medium text-gray-900">Environment</th>
                   <th className="text-left py-3 px-6 font-medium text-gray-900">Firmware</th>
                   <th className="text-left py-3 px-6 font-medium text-gray-900">Actions</th>
                 </tr>
@@ -822,6 +824,13 @@ export default function DeviceOverview() {
                         <span className="text-sm text-gray-900">
                           {formatLastSeen(device.last_seen)}
                         </span>
+                      </td>
+                      <td className="py-4 px-6">
+                        <EnvironmentCell
+                          temperatureC={device.ambient_temperature_c}
+                          humidityRh={device.ambient_humidity_rh}
+                          updatedAt={device.env_updated_at}
+                        />
                       </td>
                       <td className="py-4 px-6">
                         <span className="text-sm text-gray-900">{device.firmware_version}</span>

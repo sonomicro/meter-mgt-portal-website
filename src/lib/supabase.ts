@@ -114,6 +114,17 @@ export interface Database {
           signal_strength: number | null;
           alert_config: Record<string, any> | null;
           notehub_config: Record<string, any> | null;
+          ambient_temperature_c: number | null;
+          ambient_humidity_rh: number | null;
+          env_updated_at: string | null;
+          battery_voltage_mv: number | null;
+          uptime_s: number | null;
+          last_reset_cause: number | null;
+          health_updated_at: string | null;
+          quality_score: number | null;
+          quality_error_pct: number | null;
+          quality_updated_at: string | null;
+          volume_fixed_since: string | null;
           created_at: string;
         };
         Insert: {
@@ -137,6 +148,17 @@ export interface Database {
           signal_strength?: number | null;
           alert_config?: Record<string, any> | null;
           notehub_config?: Record<string, any> | null;
+          ambient_temperature_c?: number | null;
+          ambient_humidity_rh?: number | null;
+          env_updated_at?: string | null;
+          battery_voltage_mv?: number | null;
+          uptime_s?: number | null;
+          last_reset_cause?: number | null;
+          health_updated_at?: string | null;
+          quality_score?: number | null;
+          quality_error_pct?: number | null;
+          quality_updated_at?: string | null;
+          volume_fixed_since?: string | null;
           created_at?: string;
         };
         Update: {
@@ -160,6 +182,17 @@ export interface Database {
           signal_strength?: number | null;
           alert_config?: Record<string, any> | null;
           notehub_config?: Record<string, any> | null;
+          ambient_temperature_c?: number | null;
+          ambient_humidity_rh?: number | null;
+          env_updated_at?: string | null;
+          battery_voltage_mv?: number | null;
+          uptime_s?: number | null;
+          last_reset_cause?: number | null;
+          health_updated_at?: string | null;
+          quality_score?: number | null;
+          quality_error_pct?: number | null;
+          quality_updated_at?: string | null;
+          volume_fixed_since?: string | null;
           created_at?: string;
         };
       };
@@ -169,7 +202,10 @@ export interface Database {
           device_id: string;
           timestamp: string;
           flow_rate: number;
-          total_volume: number;
+          total_volume: number; // litres in this note's period, not a running total
+          period_s: number | null;
+          notehub_event: string | null;
+          volume_scale: number;
           battery_level: number | null;
           created_at: string;
         };
@@ -179,6 +215,9 @@ export interface Database {
           timestamp: string;
           flow_rate?: number;
           total_volume?: number;
+          period_s?: number | null;
+          notehub_event?: string | null;
+          volume_scale?: number;
           battery_level?: number | null;
           created_at?: string;
         };
@@ -188,9 +227,57 @@ export interface Database {
           timestamp?: string;
           flow_rate?: number;
           total_volume?: number;
+          period_s?: number | null;
+          notehub_event?: string | null;
+          volume_scale?: number;
           battery_level?: number | null;
           created_at?: string;
         };
+      };
+      device_env_data: {
+        Row: {
+          id: string;
+          device_id: string;
+          timestamp: string;
+          temperature_c: number;
+          humidity_rh: number;
+          notehub_event: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          device_id: string;
+          timestamp: string;
+          temperature_c: number;
+          humidity_rh: number;
+          notehub_event?: string | null;
+          created_at?: string;
+        };
+        Update: Partial<Database['public']['Tables']['device_env_data']['Insert']>;
+      };
+      device_quality_data: {
+        Row: {
+          id: string;
+          device_id: string;
+          timestamp: string;
+          cycles: number;
+          error_cycles: number;
+          warmup_cycles: number;
+          score_sum: number;
+          score_min: number | null;
+          score_windowed: number | null;
+          amp_recent_mean: number | null;
+          reason_dominant: number | null;
+          reset_count: number | null;
+          stream_on: boolean | null;
+          interval_cycles: number | null;
+          interval_mean_score: number | null;
+          interval_error_pct: number | null;
+          notehub_event: string | null;
+          created_at: string;
+        };
+        Insert: Omit<Database['public']['Tables']['device_quality_data']['Row'], 'id' | 'created_at'> & { id?: string; created_at?: string };
+        Update: Partial<Database['public']['Tables']['device_quality_data']['Insert']>;
       };
       alerts: {
         Row: {

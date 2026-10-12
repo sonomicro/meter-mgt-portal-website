@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Download, TrendingUp, TrendingDown, BarChart3, FileText, Filter, Droplets, Activity, AlertTriangle, WifiOff, Clock, Zap } from 'lucide-react';
+import { Calendar, Download, TrendingUp, TrendingDown, BarChart3, FileText, Filter, Droplets, Activity, AlertTriangle, WifiOff, Clock, Zap, Thermometer } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { supabaseServiceRole } from '../../lib/supabase';
 import { getCurrentUser } from '../../services/auth';
 import type { Database } from '../../lib/supabase';
@@ -12,6 +13,12 @@ interface DailyUsage {
   date: string;
   usage: number;
   device: string;
+}
+
+interface EnvPoint {
+  time: number;
+  temperature_c: number;
+  humidity_rh: number;
 }
 
 interface DeviceUsagePercent {
@@ -55,6 +62,11 @@ interface LeakDetectionSetting {
   max_flow_rate_threshold: number;
 }
 
+// quality.qo mean score per report, 0..100 (the meter's own scale)
+function qualityColor(score: number): string {
+  return score >= 70 ? 'text-green-600' : score >= 40 ? 'text-amber-600' : 'text-red-600';
+}
+
 export default function WaterUsage() {
   const [selectedPeriod, setSelectedPeriod] = useState('week');
   const [selectedDevice, setSelectedDevice] = useState('all');
@@ -66,6 +78,7 @@ export default function WaterUsage() {
   const [rawDeviceData, setRawDeviceData] = useState<DeviceData[]>([]);
   const [deviceUsageBreakdown, setDeviceUsageBreakdown] = useState<DeviceUsagePercent[]>([]);
   const [hourlyPatterns, setHourlyPatterns] = useState<HourlyPattern[]>([]);
+  const [envData, setEnvData] = useState<EnvPoint[]>([]);
   const [leakAlerts, setLeakAlerts] = useState<LeakAlert[]>([]);
   const [noFlowAlerts, setNoFlowAlerts] = useState<NoFlowAlert[]>([]);
   const [leakDetectionSettings, setLeakDetectionSettings] = useState<LeakDetectionSetting[]>([]);
@@ -151,7 +164,7 @@ export default function WaterUsage() {
       // Build query for device data
       let query = supabaseServiceRole
         .from('device_data')
-        .select('device_id, timestamp, flow_rate, total_volume, battery_level')
+        .select('device_id, timestamp, flow_rate, total_volume, period_s, battery_level')
         .gte('timestamp', startDate.toISOString())
         .lte('timestamp', endDate.toISOString())
         .order('timestamp', { ascending: true });
@@ -174,7 +187,9 @@ export default function WaterUsage() {
       // Store raw device data for export
       setRawDeviceData(deviceDataRecords || []);
 
-      // Process data into daily usage
+      // Process data into daily usage. Each record's total_volume is the volume
+      // of that note's period (the meter subtracts what it pushed), so usage
+      // over a day or a range is the SUM of the records, not the largest one.
       const dailyMap = new Map<string, { usage: number; device: string }>();
 
       (deviceDataRecords || []).forEach((record: any) => {
@@ -186,7 +201,7 @@ export default function WaterUsage() {
         const volume = Number(record.total_volume) || 0;
 
         if (existing) {
-          existing.usage = Math.max(existing.usage, volume);
+          existing.usage += volume;
         } else {
           dailyMap.set(date, { usage: volume, device: deviceName });
         }
@@ -204,8 +219,8 @@ export default function WaterUsage() {
       const deviceUsageMap = new Map<string, number>();
       userDevices.forEach(device => {
         const deviceRecords = (deviceDataRecords || []).filter((r: any) => r.device_id === device.id);
-        const maxVolume = deviceRecords.reduce((max, r) => Math.max(max, Number(r.total_volume) || 0), 0);
-        deviceUsageMap.set(device.id, maxVolume);
+        const volume = deviceRecords.reduce((sum, r) => sum + (Number(r.total_volume) || 0), 0);
+        deviceUsageMap.set(device.id, volume);
       });
 
       const totalUsage = Array.from(deviceUsageMap.values()).reduce((sum, val) => sum + val, 0);
@@ -217,6 +232,28 @@ export default function WaterUsage() {
       })).filter(d => d.usage > 0);
 
       setDeviceUsageBreakdown(breakdown);
+
+      // Ambient temperature/humidity history (env.qo). Only meaningful per
+      // device, so with "all devices" it is shown for a single device only.
+      const envDeviceIds = selectedDevice !== 'all'
+        ? [selectedDevice]
+        : (userDevices.length === 1 ? [userDevices[0].id] : []);
+      if (envDeviceIds.length === 1) {
+        const { data: envRows } = await supabaseServiceRole
+          .from('device_env_data')
+          .select('timestamp, temperature_c, humidity_rh')
+          .eq('device_id', envDeviceIds[0])
+          .gte('timestamp', startDate.toISOString())
+          .lte('timestamp', endDate.toISOString())
+          .order('timestamp', { ascending: true });
+        setEnvData((envRows || []).map((r: { timestamp: string; temperature_c: number; humidity_rh: number }) => ({
+          time: new Date(r.timestamp).getTime(),
+          temperature_c: Number(r.temperature_c),
+          humidity_rh: Number(r.humidity_rh)
+        })));
+      } else {
+        setEnvData([]);
+      }
 
       // Calculate hourly patterns for heatmap (last 7 days only)
       const weekAgo = new Date();
@@ -409,14 +446,15 @@ export default function WaterUsage() {
         device_id: record.device_id,
         flow_rate: record.flow_rate,
         total_volume: record.total_volume,
+        period_s: record.period_s,
         battery_level: record.battery_level
       };
     });
 
     if (format === 'csv') {
-      content = 'Timestamp,Device Name,Alias,Fleet Group,Device ID,Flow Rate (L/min),Total Volume (L),Battery Level (%)\n' +
+      content = 'Timestamp,Device Name,Alias,Fleet Group,Device ID,Flow Rate (L/min),Volume in Period (L),Period (s),Battery Level (%)\n' +
                 dataWithNames.map(d =>
-                  `${d.timestamp},${d.device_name},${d.device_alias},${d.fleet_group},${d.device_id},${d.flow_rate || 0},${d.total_volume || 0},${d.battery_level ?? ''}`
+                  `${d.timestamp},${d.device_name},${d.device_alias},${d.fleet_group},${d.device_id},${d.flow_rate || 0},${d.total_volume || 0},${d.period_s ?? ''},${d.battery_level ?? ''}`
                 ).join('\n');
       filename = `water-usage-full-resolution-${new Date().toISOString().split('T')[0]}.csv`;
     } else if (format === 'json') {
@@ -439,7 +477,7 @@ export default function WaterUsage() {
                   (d.device_alias ? `  Alias: ${d.device_alias}\n` : '') +
                   (d.fleet_group ? `  Fleet Group: ${d.fleet_group}\n` : '') +
                   `  Flow Rate: ${(d.flow_rate || 0).toFixed(2)} L/min\n` +
-                  `  Total Volume: ${(d.total_volume || 0).toFixed(2)} L\n` +
+                  `  Volume in Period: ${(d.total_volume || 0).toFixed(2)} L\n` +
                   `  Battery: ${d.battery_level != null ? d.battery_level + '%' : 'N/A'}\n`
                 ).join('\n');
       filename = `water-usage-report-${new Date().toISOString().split('T')[0]}.txt`;
@@ -755,10 +793,60 @@ export default function WaterUsage() {
                           <span className="text-gray-600">Flow Rate</span>
                           <span className="text-gray-900">{device.flow_rate?.toFixed(1) || '0'} L/min</span>
                         </div>
+                        {device.ambient_temperature_c != null && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-600">Temperature / Humidity</span>
+                            <span className="text-gray-900">
+                              {Number(device.ambient_temperature_c).toFixed(1)} °C / {Number(device.ambient_humidity_rh ?? 0).toFixed(0)} %RH
+                            </span>
+                          </div>
+                        )}
+                        {device.quality_score != null && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-600">Measurement Quality</span>
+                            <span className={`font-medium ${qualityColor(Number(device.quality_score))}`}
+                                  title={device.quality_error_pct != null ? `${Number(device.quality_error_pct).toFixed(1)}% error cycles in the last report` : undefined}>
+                              {Number(device.quality_score).toFixed(0)}/100
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          )}
+
+          {/* Ambient temperature / humidity */}
+          {envData.length > 0 && (
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Temperature & Humidity</h3>
+                <Thermometer className="h-5 w-5 text-gray-400" />
+              </div>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={envData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="time"
+                      type="number"
+                      scale="time"
+                      domain={['dataMin', 'dataMax']}
+                      tickFormatter={(t) => new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    />
+                    <YAxis yAxisId="temp" unit=" °C" />
+                    <YAxis yAxisId="rh" orientation="right" unit=" %" domain={[0, 100]} />
+                    <Tooltip
+                      labelFormatter={(t) => new Date(t as number).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      formatter={(value: number, name: string) => [name === 'Temperature' ? `${value.toFixed(1)} °C` : `${value.toFixed(0)} %RH`, name]}
+                    />
+                    <Legend />
+                    <Line yAxisId="temp" type="monotone" dataKey="temperature_c" name="Temperature" stroke="#dc2626" strokeWidth={2} dot={false} />
+                    <Line yAxisId="rh" type="monotone" dataKey="humidity_rh" name="Humidity" stroke="#2563eb" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
               </div>
             </div>
           )}
