@@ -513,6 +513,21 @@ Deno.serve(async (req) => {
         console.error('Error updating device health:', updateError)
       }
 
+      // Firmware before 2.7.0 sent data.qo volumes 60x too low (L/min integrated
+      // as L/h); record_flow_note() scales them until the device reports a fixed
+      // version, counted from its boot.
+      if (payload.body.health_fw_version) {
+        const bootMs = payload.when * 1000 - (payload.body.health_uptime_ms ?? 0)
+        const { error: fwError } = await supabaseClient.rpc('mark_device_firmware', {
+          p_device_id: device.id,
+          p_fw_version: payload.body.health_fw_version,
+          p_boot_time: new Date(bootMs).toISOString()
+        })
+        if (fwError) {
+          console.error('Error marking device firmware:', fwError)
+        }
+      }
+
       console.log(`Updated firmware health for device ${device.name}`)
     }
 

@@ -124,6 +124,7 @@ export interface Database {
           quality_score: number | null;
           quality_error_pct: number | null;
           quality_updated_at: string | null;
+          volume_fixed_since: string | null;
           created_at: string;
         };
         Insert: {
@@ -157,6 +158,7 @@ export interface Database {
           quality_score?: number | null;
           quality_error_pct?: number | null;
           quality_updated_at?: string | null;
+          volume_fixed_since?: string | null;
           created_at?: string;
         };
         Update: {
@@ -190,6 +192,7 @@ export interface Database {
           quality_score?: number | null;
           quality_error_pct?: number | null;
           quality_updated_at?: string | null;
+          volume_fixed_since?: string | null;
           created_at?: string;
         };
       };
@@ -202,6 +205,7 @@ export interface Database {
           total_volume: number; // litres in this note's period, not a running total
           period_s: number | null;
           notehub_event: string | null;
+          volume_scale: number;
           battery_level: number | null;
           created_at: string;
         };
@@ -213,6 +217,7 @@ export interface Database {
           total_volume?: number;
           period_s?: number | null;
           notehub_event?: string | null;
+          volume_scale?: number;
           battery_level?: number | null;
           created_at?: string;
         };
@@ -224,6 +229,7 @@ export interface Database {
           total_volume?: number;
           period_s?: number | null;
           notehub_event?: string | null;
+          volume_scale?: number;
           battery_level?: number | null;
           created_at?: string;
         };
