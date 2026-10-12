@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Search, MoreVertical, CreditCard as Edit, Trash2, Wifi, WifiOff, Wrench, Battery, MapPin, Calendar, Download, Settings, Zap, AlertTriangle, X, Save, Upload, CheckCircle, Clock, Globe, Activity, Tag, Folder, FolderPlus, Antenna } from 'lucide-react';
+import { EnvironmentCell } from '../Shared/DeviceTelemetry';
 import { DeviceService, FleetGroupService } from '../../services/database';
 import { getCurrentUser } from '../../services/auth';
 import type { Database } from '../../lib/supabase';
@@ -690,6 +691,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                   <th className="text-left py-3 px-6 font-medium text-gray-900">Battery</th>
                   <th className="text-left py-3 px-6 font-medium text-gray-900">Signal</th>
                   <th className="text-left py-3 px-6 font-medium text-gray-900">Flow Rate</th>
+                  <th className="text-left py-3 px-6 font-medium text-gray-900">Environment</th>
                   <th className="text-left py-3 px-6 font-medium text-gray-900">Firmware</th>
                   <th className="text-left py-3 px-6 font-medium text-gray-900">Actions</th>
                 </tr>
@@ -767,6 +769,13 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                       <span className="text-sm font-medium text-gray-900">
                         {device.status === 'offline' ? 'Offline' : (device.flow_rate > 0 ? `${device.flow_rate.toFixed(2)}L/min` : 'No flow')}
                       </span>
+                    </td>
+                    <td className="py-4 px-6">
+                      <EnvironmentCell
+                        temperatureC={device.ambient_temperature_c}
+                        humidityRh={device.ambient_humidity_rh}
+                        updatedAt={device.env_updated_at}
+                      />
                     </td>
                     <td className="py-4 px-6">
                       <span className="text-sm text-gray-900">{device.firmware_version}</span>
