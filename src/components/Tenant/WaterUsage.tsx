@@ -62,6 +62,31 @@ interface LeakDetectionSetting {
   max_flow_rate_threshold: number;
 }
 
+interface VolumeNote {
+  device_id: string;
+  timestamp: string;
+  total_volume: number | null;
+  period_s: number | null;
+}
+
+// Seconds a data.qo volume covers: period_s from firmware 2.7+, otherwise the
+// gap to the device's previous note (hourly by default; long gaps are outages
+// whose volume was never sent, so they are not spread over).
+function noteSpans(notes: VolumeNote[]): Map<VolumeNote, number> {
+  const spans = new Map<VolumeNote, number>();
+  const lastByDevice = new Map<string, number>();
+  [...notes]
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    .forEach(n => {
+      const t = new Date(n.timestamp).getTime();
+      const prev = lastByDevice.get(n.device_id);
+      const gap = prev !== undefined ? (t - prev) / 1000 : 0;
+      spans.set(n, n.period_s ?? (gap > 0 && gap <= 7200 ? gap : 3600));
+      lastByDevice.set(n.device_id, t);
+    });
+  return spans;
+}
+
 // quality.qo mean score per report, 0..100 (the meter's own scale)
 function qualityColor(score: number): string {
   return score >= 70 ? 'text-green-600' : score >= 40 ? 'text-amber-600' : 'text-red-600';
@@ -78,6 +103,7 @@ export default function WaterUsage() {
   const [rawDeviceData, setRawDeviceData] = useState<DeviceData[]>([]);
   const [deviceUsageBreakdown, setDeviceUsageBreakdown] = useState<DeviceUsagePercent[]>([]);
   const [hourlyPatterns, setHourlyPatterns] = useState<HourlyPattern[]>([]);
+  const [avgFlowByDevice, setAvgFlowByDevice] = useState<Map<string, number>>(new Map());
   const [envData, setEnvData] = useState<EnvPoint[]>([]);
   const [leakAlerts, setLeakAlerts] = useState<LeakAlert[]>([]);
   const [noFlowAlerts, setNoFlowAlerts] = useState<NoFlowAlert[]>([]);
@@ -261,21 +287,34 @@ export default function WaterUsage() {
 
       const { data: hourlyData } = await supabaseServiceRole
         .from('device_data')
-        .select('device_id, timestamp, flow_rate')
+        .select('device_id, timestamp, total_volume, period_s')
         .gte('timestamp', weekAgo.toISOString())
         .in('device_id', userDevices.map(d => d.id));
 
       const hourlyMap = new Map<string, number>();
       const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-      (hourlyData || []).forEach((record: any) => {
-        const date = new Date(record.timestamp);
-        const day = days[date.getDay()];
-        const hour = date.getHours();
-        const key = `${day}-${hour}`;
-        const flow = Number(record.flow_rate) || 0;
-        hourlyMap.set(key, (hourlyMap.get(key) || 0) + flow);
+      // The flow rate in a note is one instantaneous sample, so the pattern and
+      // the average flow are built from the volumes, placed at the middle of
+      // the span each one covers.
+      const notes = (hourlyData || []) as VolumeNote[];
+      const spans = noteSpans(notes);
+      const latestByDevice = new Map<string, VolumeNote>();
+      notes.forEach(n => {
+        const span = spans.get(n) ?? 3600;
+        const date = new Date(new Date(n.timestamp).getTime() - (span * 1000) / 2);
+        const key = `${days[date.getDay()]}-${date.getHours()}`;
+        hourlyMap.set(key, (hourlyMap.get(key) || 0) + (Number(n.total_volume) || 0));
+        const latest = latestByDevice.get(n.device_id);
+        if (!latest || n.timestamp > latest.timestamp) {
+          latestByDevice.set(n.device_id, n);
+        }
       });
+      const avgFlow = new Map<string, number>();
+      latestByDevice.forEach((n, deviceId) => {
+        avgFlow.set(deviceId, ((Number(n.total_volume) || 0) / (spans.get(n) ?? 3600)) * 60);
+      });
+      setAvgFlowByDevice(avgFlow);
 
       const patterns: HourlyPattern[] = [];
       days.forEach(day => {
@@ -339,9 +378,9 @@ export default function WaterUsage() {
         const noFlowThreshold = deviceSetting?.no_flow_duration_threshold || defaultNoFlowThreshold;
         const maxFlowRate = deviceSetting?.max_flow_rate_threshold ?? defaultMaxFlowRate;
 
-        const deviceRecords = (hourlyData || [])
-          .filter((r: any) => r.device_id === device.id)
-          .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const deviceRecords = notes
+          .filter(r => r.device_id === device.id)
+          .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
         let continuousFlowCount = 0;
         let totalFlow = 0;
@@ -351,7 +390,7 @@ export default function WaterUsage() {
         let noFlowFound = false;
 
         for (const record of deviceRecords) {
-          const flow = Number(record.flow_rate) || 0;
+          const flow = ((Number(record.total_volume) || 0) / (spans.get(record) ?? 3600)) * 60;
 
           if (isEnabled && !leakFound) {
             if (flow >= minFlowRate) {
@@ -790,8 +829,10 @@ export default function WaterUsage() {
                           <span className="text-gray-900">{lastSeenText}</span>
                         </div>
                         <div className="flex items-center justify-between">
-                          <span className="text-gray-600">Flow Rate</span>
-                          <span className="text-gray-900">{device.flow_rate?.toFixed(1) || '0'} L/min</span>
+                          <span className="text-gray-600" title="Volume of the last report divided by the time it covers">Avg Flow (last report)</span>
+                          <span className="text-gray-900">
+                            {avgFlowByDevice.has(device.id) ? `${avgFlowByDevice.get(device.id)!.toFixed(1)} L/min` : '—'}
+                          </span>
                         </div>
                         {device.ambient_temperature_c != null && (
                           <div className="flex items-center justify-between">
