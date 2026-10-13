@@ -103,7 +103,6 @@ export default function WaterUsage() {
   const [rawDeviceData, setRawDeviceData] = useState<DeviceData[]>([]);
   const [deviceUsageBreakdown, setDeviceUsageBreakdown] = useState<DeviceUsagePercent[]>([]);
   const [hourlyPatterns, setHourlyPatterns] = useState<HourlyPattern[]>([]);
-  const [avgFlowByDevice, setAvgFlowByDevice] = useState<Map<string, number>>(new Map());
   const [envData, setEnvData] = useState<EnvPoint[]>([]);
   const [leakAlerts, setLeakAlerts] = useState<LeakAlert[]>([]);
   const [noFlowAlerts, setNoFlowAlerts] = useState<NoFlowAlert[]>([]);
@@ -295,26 +294,16 @@ export default function WaterUsage() {
       const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
       // The flow rate in a note is one instantaneous sample, so the pattern and
-      // the average flow are built from the volumes, placed at the middle of
-      // the span each one covers.
+      // the leak checks use the volumes, placed at the middle of the span each
+      // one covers.
       const notes = (hourlyData || []) as VolumeNote[];
       const spans = noteSpans(notes);
-      const latestByDevice = new Map<string, VolumeNote>();
       notes.forEach(n => {
         const span = spans.get(n) ?? 3600;
         const date = new Date(new Date(n.timestamp).getTime() - (span * 1000) / 2);
         const key = `${days[date.getDay()]}-${date.getHours()}`;
         hourlyMap.set(key, (hourlyMap.get(key) || 0) + (Number(n.total_volume) || 0));
-        const latest = latestByDevice.get(n.device_id);
-        if (!latest || n.timestamp > latest.timestamp) {
-          latestByDevice.set(n.device_id, n);
-        }
       });
-      const avgFlow = new Map<string, number>();
-      latestByDevice.forEach((n, deviceId) => {
-        avgFlow.set(deviceId, ((Number(n.total_volume) || 0) / (spans.get(n) ?? 3600)) * 60);
-      });
-      setAvgFlowByDevice(avgFlow);
 
       const patterns: HourlyPattern[] = [];
       days.forEach(day => {
@@ -831,7 +820,7 @@ export default function WaterUsage() {
                         <div className="flex items-center justify-between">
                           <span className="text-gray-600" title="Volume of the last report divided by the time it covers">Avg Flow (last report)</span>
                           <span className="text-gray-900">
-                            {avgFlowByDevice.has(device.id) ? `${avgFlowByDevice.get(device.id)!.toFixed(1)} L/min` : '—'}
+                            {device.avg_flow_rate != null ? `${Number(device.avg_flow_rate).toFixed(1)} L/min` : '—'}
                           </span>
                         </div>
                         {device.ambient_temperature_c != null && (

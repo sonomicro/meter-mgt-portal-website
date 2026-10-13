@@ -106,6 +106,7 @@ export interface Database {
           last_seen: string;
           battery_level: number;
           flow_rate: number;
+          avg_flow_rate: number | null;
           total_usage: number;
           install_date: string;
           notehub_device_uid: string | null;
@@ -140,6 +141,7 @@ export interface Database {
           last_seen?: string;
           battery_level?: number;
           flow_rate?: number;
+          avg_flow_rate?: number | null;
           total_usage?: number;
           install_date?: string;
           notehub_device_uid?: string | null;
@@ -174,6 +176,7 @@ export interface Database {
           last_seen?: string;
           battery_level?: number;
           flow_rate?: number;
+          avg_flow_rate?: number | null;
           total_usage?: number;
           install_date?: string;
           notehub_device_uid?: string | null;

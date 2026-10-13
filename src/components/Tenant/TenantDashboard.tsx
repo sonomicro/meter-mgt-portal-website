@@ -139,7 +139,7 @@ export default function TenantDashboard() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-medium text-gray-900">{(device.flow_rate ?? 0).toFixed(2)}L/min</p>
+                    <p className="text-sm font-medium text-gray-900">{Number(device.avg_flow_rate ?? 0).toFixed(2)}L/min</p>
                     <p className="text-xs text-gray-500">{device.battery_level}% battery</p>
                   </div>
                 </div>

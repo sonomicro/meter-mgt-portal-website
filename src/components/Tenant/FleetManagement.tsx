@@ -734,10 +734,10 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                             {fleetGroups.find(g => g.id === device.fleet_group_id)?.name}
                           </span>
                         )}
-                        {device.flow_rate > 0 && (
+                        {Number(device.avg_flow_rate) > 0 && (
                           <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 mt-1 ml-2">
                             <Activity className="h-3 w-3 mr-1" />
-                            {device.flow_rate.toFixed(2)}L/min
+                            {Number(device.avg_flow_rate).toFixed(2)}L/min
                           </span>
                         )}
                       </div>
@@ -767,7 +767,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                     </td>
                     <td className="py-4 px-6">
                       <span className="text-sm font-medium text-gray-900">
-                        {device.status === 'offline' ? 'Offline' : (device.flow_rate > 0 ? `${device.flow_rate.toFixed(2)}L/min` : 'No flow')}
+                        {device.status === 'offline' ? 'Offline' : (Number(device.avg_flow_rate) > 0 ? `${Number(device.avg_flow_rate).toFixed(2)}L/min` : 'No flow')}
                       </span>
                     </td>
                     <td className="py-4 px-6">
