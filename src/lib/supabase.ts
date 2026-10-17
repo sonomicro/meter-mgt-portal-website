@@ -101,7 +101,7 @@ export interface Database {
           location: string;
           coordinates: { lat: number; lon: number } | null;
           tenant_id: string | null;
-          status: 'online' | 'offline' | 'maintenance';
+          status: 'online' | 'offline' | 'maintenance' | 'parked';
           firmware_version: string;
           last_seen: string;
           battery_level: number;
@@ -126,6 +126,8 @@ export interface Database {
           quality_error_pct: number | null;
           quality_updated_at: string | null;
           volume_fixed_since: string | null;
+          parked: boolean;
+          parked_at: string | null;
           created_at: string;
         };
         Insert: {
@@ -161,6 +163,8 @@ export interface Database {
           quality_error_pct?: number | null;
           quality_updated_at?: string | null;
           volume_fixed_since?: string | null;
+          parked?: boolean;
+          parked_at?: string | null;
           created_at?: string;
         };
         Update: {
@@ -196,6 +200,8 @@ export interface Database {
           quality_error_pct?: number | null;
           quality_updated_at?: string | null;
           volume_fixed_since?: string | null;
+          parked?: boolean;
+          parked_at?: string | null;
           created_at?: string;
         };
       };

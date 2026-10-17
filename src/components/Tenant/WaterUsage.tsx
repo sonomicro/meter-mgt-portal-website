@@ -357,7 +357,8 @@ export default function WaterUsage() {
         // Check device-specific settings, fall back to global
         const deviceSetting = (leakSettings || []).find(s => s.device_id === device.id);
         const isEnabled = deviceSetting ? deviceSetting.enabled : globalEnabled;
-        const isNoFlowEnabled = deviceSetting ? deviceSetting.no_flow_enabled : globalNoFlowEnabled;
+        const isNoFlowEnabled = device.status !== 'parked' &&
+          (deviceSetting ? deviceSetting.no_flow_enabled : globalNoFlowEnabled);
 
         // Skip if neither check applies to this device
         if (!isEnabled && !isNoFlowEnabled) continue;
@@ -791,6 +792,7 @@ export default function WaterUsage() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {devices.map(device => {
                   const isOnline = device.status === 'online';
+                  const isParked = device.status === 'parked';
                   const batteryLevel = device.battery_level || 0;
                   const lastSeenText = device.last_seen
                     ? new Date(device.last_seen).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -803,7 +805,7 @@ export default function WaterUsage() {
                         <span className={`px-2 py-1 text-xs rounded-full ${
                           isOnline ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
                         }`}>
-                          {isOnline ? 'Online' : 'Offline'}
+                          {isOnline ? 'Online' : isParked ? 'Parked' : 'Offline'}
                         </span>
                       </div>
                       <div className="space-y-2 text-sm">

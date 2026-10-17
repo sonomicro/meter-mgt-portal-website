@@ -150,7 +150,7 @@ export class SecureDatabase {
         throw new Error('Forbidden: Cannot update devices from other tenants');
       }
 
-      const allowedUpdates = ['alias', 'fleet_group_id', 'alert_config'];
+      const allowedUpdates = ['alias', 'fleet_group_id', 'alert_config', 'parked', 'parked_at'];
       const filteredUpdates = Object.keys(updates)
         .filter(key => allowedUpdates.includes(key))
         .reduce((obj, key) => {

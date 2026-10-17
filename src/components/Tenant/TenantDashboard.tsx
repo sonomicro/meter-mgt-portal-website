@@ -42,6 +42,7 @@ export default function TenantDashboard() {
 
   const totalUsage = devices.reduce((sum, device) => sum + device.total_usage, 0);
   const onlineDevices = devices.filter(d => d.status === 'online').length;
+  const inServiceDevices = devices.filter(d => d.status !== 'parked').length;
 
   // Count devices that are offline or in maintenance as alerts
   const activeAlerts = devices.filter(d => d.status === 'offline' || d.status === 'maintenance').length;
@@ -56,7 +57,7 @@ export default function TenantDashboard() {
     },
     {
       label: 'Active Devices',
-      value: `${onlineDevices}/${devices.length}`,
+      value: `${onlineDevices}/${inServiceDevices}`,
       change: 'All systems operational',
       icon: Wifi,
       color: 'green'
@@ -131,7 +132,8 @@ export default function TenantDashboard() {
                   <div className="flex items-center space-x-3">
                     <div className={`w-3 h-3 rounded-full ${
                       device.status === 'online' ? 'bg-green-500' :
-                      device.status === 'offline' ? 'bg-red-500' : 'bg-yellow-500'
+                      device.status === 'offline' ? 'bg-red-500' :
+                      device.status === 'parked' ? 'bg-gray-400' : 'bg-yellow-500'
                     }`} />
                     <div>
                       <p className="text-sm font-medium text-gray-900">{device.alias || device.name}</p>
@@ -139,8 +141,14 @@ export default function TenantDashboard() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-medium text-gray-900">{Number(device.avg_flow_rate ?? 0).toFixed(2)}L/min</p>
-                    <p className="text-xs text-gray-500">{device.battery_level}% battery</p>
+                    {device.status === 'parked' ? (
+                      <p className="text-sm font-medium text-gray-500">Parked</p>
+                    ) : (
+                      <>
+                        <p className="text-sm font-medium text-gray-900">{Number(device.avg_flow_rate ?? 0).toFixed(2)}L/min</p>
+                        <p className="text-xs text-gray-500">{device.battery_level}% battery</p>
+                      </>
+                    )}
                   </div>
                 </div>
               ))
