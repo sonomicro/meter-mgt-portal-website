@@ -220,7 +220,7 @@ export default function WaterUsage() {
       (deviceDataRecords || []).forEach((record: any) => {
         const date = new Date(record.timestamp).toISOString().split('T')[0];
         const device = userDevices.find(d => d.id === record.device_id);
-        const deviceName = device?.name || 'Unknown Device';
+        const deviceName = device ? device.alias || device.name : 'Unknown Device';
 
         const existing = dailyMap.get(date);
         const volume = Number(record.total_volume) || 0;
@@ -251,7 +251,7 @@ export default function WaterUsage() {
       const totalUsage = Array.from(deviceUsageMap.values()).reduce((sum, val) => sum + val, 0);
       const breakdown: DeviceUsagePercent[] = userDevices.map(device => ({
         id: device.id,
-        name: device.name,
+        name: device.alias || device.name,
         usage: deviceUsageMap.get(device.id) || 0,
         percentage: totalUsage > 0 ? ((deviceUsageMap.get(device.id) || 0) / totalUsage) * 100 : 0
       })).filter(d => d.usage > 0);
@@ -394,7 +394,7 @@ export default function WaterUsage() {
             if (continuousFlowCount >= threshold) {
               leaks.push({
                 deviceId: device.id,
-                deviceName: device.name,
+                deviceName: device.alias || device.name,
                 duration: continuousFlowCount,
                 avgFlowRate: totalFlow / continuousFlowCount,
                 lastSeen: device.last_seen || ''
@@ -416,7 +416,7 @@ export default function WaterUsage() {
             if (noFlowCount >= noFlowThreshold) {
               noFlows.push({
                 deviceId: device.id,
-                deviceName: device.name,
+                deviceName: device.alias || device.name,
                 duration: noFlowCount,
                 avgFlowRate: totalNoFlow / noFlowCount,
                 lastSeen: device.last_seen || ''
@@ -442,7 +442,7 @@ export default function WaterUsage() {
     ? usageData
     : usageData.filter(d => {
         const device = devices.find(dev => dev.id === selectedDevice);
-        return d.device === device?.name;
+        return device !== undefined && d.device === (device.alias || device.name);
       });
 
   const totalUsage = filteredData.reduce((sum, day) => sum + day.usage, 0);
@@ -489,7 +489,8 @@ export default function WaterUsage() {
       content = JSON.stringify(dataWithNames, null, 2);
       filename = `water-usage-full-resolution-${new Date().toISOString().split('T')[0]}.json`;
     } else {
-      const deviceName = devices.find(d => d.id === selectedDevice)?.name || 'All Devices';
+      const selected = devices.find(d => d.id === selectedDevice);
+      const deviceName = selected ? selected.alias || selected.name : 'All Devices';
       content = `WATER USAGE REPORT - FULL RESOLUTION DATA\n\n` +
                 `Generated: ${new Date().toLocaleString()}\n` +
                 `Period: ${selectedPeriod}\n` +
@@ -522,7 +523,8 @@ export default function WaterUsage() {
   };
 
   const generateReport = () => {
-    const deviceName = devices.find(d => d.id === selectedDevice)?.name || 'All Devices';
+    const selected = devices.find(d => d.id === selectedDevice);
+    const deviceName = selected ? selected.alias || selected.name : 'All Devices';
 
     // Filter raw data by selected device
     const exportData = selectedDevice === 'all'
@@ -622,7 +624,7 @@ export default function WaterUsage() {
           >
             <option value="all">All Devices</option>
             {devices.map(device => (
-              <option key={device.id} value={device.id}>{device.name}</option>
+              <option key={device.id} value={device.id}>{device.alias || device.name}</option>
             ))}
           </select>
           <select
@@ -797,7 +799,7 @@ export default function WaterUsage() {
                   return (
                     <div key={device.id} className="border border-gray-200 rounded-lg p-4">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="font-medium text-gray-900">{device.name}</span>
+                        <span className="font-medium text-gray-900">{device.alias || device.name}</span>
                         <span className={`px-2 py-1 text-xs rounded-full ${
                           isOnline ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
                         }`}>

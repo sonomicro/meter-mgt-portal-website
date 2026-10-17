@@ -134,7 +134,7 @@ export default function TenantDashboard() {
                       device.status === 'offline' ? 'bg-red-500' : 'bg-yellow-500'
                     }`} />
                     <div>
-                      <p className="text-sm font-medium text-gray-900">{device.name}</p>
+                      <p className="text-sm font-medium text-gray-900">{device.alias || device.name}</p>
                       <p className="text-xs text-gray-500">{device.location}</p>
                     </div>
                   </div>
