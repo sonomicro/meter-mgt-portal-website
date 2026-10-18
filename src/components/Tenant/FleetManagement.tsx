@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, MoreVertical, CreditCard as Edit, Trash2, Wifi, WifiOff, Wrench, Battery, MapPin, Calendar, Download, Settings, Zap, AlertTriangle, X, Save, Upload, CheckCircle, Clock, Globe, Activity, Tag, Folder, FolderPlus, Antenna, PauseCircle } from 'lucide-react';
+import { Plus, Search, MoreVertical, CreditCard as Edit, Trash2, Wifi, WifiOff, Wrench, Battery, MapPin, Calendar, Download, Settings, Zap, AlertTriangle, X, Save, Upload, CheckCircle, Clock, Globe, Activity, Tag, Folder, FolderPlus, Antenna, PauseCircle, PlayCircle } from 'lucide-react';
 import { EnvironmentCell } from '../Shared/DeviceTelemetry';
 import { DeviceService, FleetGroupService } from '../../services/database';
 import { getCurrentUser } from '../../services/auth';
@@ -56,8 +56,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
 
   const [deviceEdit, setDeviceEdit] = useState({
     alias: '',
-    fleet_group_id: null as string | null,
-    parked: false
+    fleet_group_id: null as string | null
   });
 
   const [newGroup, setNewGroup] = useState({
@@ -299,8 +298,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
     setSelectedDevice(device);
     setDeviceEdit({
       alias: device.alias || '',
-      fleet_group_id: device.fleet_group_id || null,
-      parked: device.parked ?? false
+      fleet_group_id: device.fleet_group_id || null
     });
     setShowEditDeviceModal(true);
   };
@@ -311,11 +309,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
     try {
       await DeviceService.updateDevice(selectedDevice.id, {
         alias: deviceEdit.alias || null,
-        fleet_group_id: deviceEdit.fleet_group_id,
-        ...(deviceEdit.parked !== (selectedDevice.parked ?? false) && {
-          parked: deviceEdit.parked,
-          parked_at: deviceEdit.parked ? new Date().toISOString() : null
-        })
+        fleet_group_id: deviceEdit.fleet_group_id
       }, true);
       await loadDevices();
       setShowEditDeviceModal(false);
@@ -323,6 +317,26 @@ export default function FleetManagement({ user }: FleetManagementProps) {
     } catch (error) {
       console.error('Error updating device:', error);
       alert('Failed to update device. Please try again.');
+    }
+  };
+
+  const handleToggleParked = async (device: Device) => {
+    const name = device.alias || device.name;
+    const park = !device.parked;
+    const prompt = park
+      ? `Park ${name}? It will not be shown as offline and raises no offline or no-flow alerts until it is unparked.`
+      : `Unpark ${name}? It will be monitored again and reported offline if it does not check in.`;
+    if (!confirm(prompt)) return;
+
+    try {
+      await DeviceService.updateDevice(device.id, {
+        parked: park,
+        parked_at: park ? new Date().toISOString() : null
+      }, true);
+      await loadDevices();
+    } catch (error) {
+      console.error('Error updating device parking:', error);
+      alert(`Failed to ${park ? 'park' : 'unpark'} device. Please try again.`);
     }
   };
 
@@ -796,7 +810,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                         <button
                           onClick={() => openEditDeviceModal(device)}
                           className="p-1 rounded hover:bg-gray-100 transition-colors"
-                          title="Edit Alias, Group & Parking"
+                          title="Edit Alias & Group"
                         >
                           <Tag className="h-4 w-4 text-gray-600" />
                         </button>
@@ -806,6 +820,15 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                           title="Advanced Settings"
                         >
                           <Settings className="h-4 w-4 text-gray-600" />
+                        </button>
+                        <button
+                          onClick={() => handleToggleParked(device)}
+                          className="p-1 rounded hover:bg-gray-100 transition-colors"
+                          title={device.parked ? 'Unpark (back in service)' : 'Park (not in use)'}
+                        >
+                          {device.parked
+                            ? <PlayCircle className="h-4 w-4 text-green-600" />
+                            : <PauseCircle className="h-4 w-4 text-gray-600" />}
                         </button>
                         <button
                           onClick={() => {
@@ -1037,7 +1060,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
       {showEditDeviceModal && selectedDevice && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Edit Device Alias, Group & Parking</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Edit Device Alias & Group</h3>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Device Name (Original)</label>
@@ -1071,18 +1094,6 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                     <option key={group.id} value={group.id}>{group.name}</option>
                   ))}
                 </select>
-              </div>
-              <div>
-                <label className="flex items-center space-x-2">
-                  <input
-                    type="checkbox"
-                    checked={deviceEdit.parked}
-                    onChange={(e) => setDeviceEdit({...deviceEdit, parked: e.target.checked})}
-                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span className="text-sm font-medium text-gray-700">Parked (not in use)</span>
-                </label>
-                <p className="text-xs text-gray-500 mt-1">A parked device is not shown as offline and raises no offline or no-flow alerts. Uncheck when it is back in service.</p>
               </div>
             </div>
             <div className="flex justify-end space-x-3 mt-6">
