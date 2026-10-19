@@ -273,10 +273,16 @@ export default function FleetManagement({ user }: FleetManagementProps) {
     }
 
     switch (bulkAction) {
-      case 'firmware':
-        setFirmwareUpdate(prev => ({ ...prev, devices: selectedDevices }));
+      case 'firmware': {
+        const inService = selectedDevices.filter(id => !devices.find(d => d.id === id)?.parked);
+        if (inService.length === 0) {
+          alert('All selected devices are parked. Unpark them to update firmware.');
+          break;
+        }
+        setFirmwareUpdate(prev => ({ ...prev, devices: inService }));
         setShowFirmwareModal(true);
         break;
+      }
     }
     setBulkAction('');
   };
@@ -443,7 +449,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
   };
 
   const handleSaveAdvancedSettings = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice || selectedDevice.parked) return;
 
     // Without a battery board the battery section is not used: keep the
     // stored values and send nothing for it
@@ -826,7 +832,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                         <button
                           onClick={() => openAdvancedModal(device)}
                           className="p-1 rounded hover:bg-gray-100 transition-colors"
-                          title="Advanced Settings"
+                          title={device.parked ? 'Advanced Settings (read-only while parked)' : 'Advanced Settings'}
                         >
                           <Settings className="h-4 w-4 text-gray-600" />
                         </button>
@@ -844,8 +850,9 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                             setFirmwareUpdate(prev => ({ ...prev, devices: [device.id] }));
                             setShowFirmwareModal(true);
                           }}
-                          className="p-1 rounded hover:bg-gray-100 transition-colors"
-                          title="Update Firmware"
+                          disabled={device.parked}
+                          className="p-1 rounded hover:bg-gray-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                          title={device.parked ? 'Unpark the device to update firmware' : 'Update Firmware'}
                         >
                           <Zap className="h-4 w-4 text-gray-600" />
                         </button>
@@ -1132,8 +1139,14 @@ export default function FleetManagement({ user }: FleetManagementProps) {
             <p className="text-sm text-gray-600 mb-6">
               Configure Notehub environment variables for <strong>{selectedDevice.alias || selectedDevice.name}</strong>. Changes will be synced to the device.
             </p>
+            {selectedDevice.parked && (
+              <div className="flex items-center bg-gray-100 border border-gray-200 rounded-lg p-3 mb-6 text-sm text-gray-700">
+                <PauseCircle className="h-5 w-5 text-gray-500 mr-2 flex-shrink-0" />
+                This device is parked. Its settings are read-only until it is unparked.
+              </div>
+            )}
 
-            <div className="space-y-6">
+            <fieldset disabled={!!selectedDevice.parked} className={`space-y-6 ${selectedDevice.parked ? 'opacity-50' : ''}`}>
               {/* Flow Sensor Settings */}
               <div className="bg-blue-50 p-4 rounded-lg">
                 <h4 className="font-medium text-gray-900 mb-3 flex items-center">
@@ -1399,7 +1412,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                   </div>
                 </div>
               </div>
-            </div>
+            </fieldset>
 
             <div className="flex justify-end space-x-3 mt-6 border-t border-gray-200 pt-4">
               <button
@@ -1410,7 +1423,8 @@ export default function FleetManagement({ user }: FleetManagementProps) {
               </button>
               <button
                 onClick={handleSaveAdvancedSettings}
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2"
+                disabled={!!selectedDevice.parked}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2 disabled:bg-gray-400 disabled:cursor-not-allowed"
               >
                 <Save className="h-4 w-4" />
                 <span>Save & Sync to Device</span>

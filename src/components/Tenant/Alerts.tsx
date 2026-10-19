@@ -126,8 +126,13 @@ export default function Alerts() {
     }
   };
 
-  const activeAlerts = filteredAlerts.filter(a => !a.resolved).length;
-  const highPriorityAlerts = filteredAlerts.filter(a => !a.resolved && a.severity === 'high').length;
+  // Alerts from parked devices stay listed (grayed) but are not counted
+  const parkedDeviceIds = new Set(devices.filter(d => d.parked).map(d => d.id));
+  const isFromParked = (alert: Alert) => !!alert.device_id && parkedDeviceIds.has(alert.device_id);
+  const countedAlerts = filteredAlerts.filter(a => !isFromParked(a));
+
+  const activeAlerts = countedAlerts.filter(a => !a.resolved).length;
+  const highPriorityAlerts = countedAlerts.filter(a => !a.resolved && a.severity === 'high').length;
 
   if (loading) {
     return (
@@ -190,7 +195,7 @@ export default function Alerts() {
           </div>
           <div>
             <p className="text-2xl font-bold text-gray-900 mb-1">
-              {filteredAlerts.filter(a => a.resolved).length}
+              {countedAlerts.filter(a => a.resolved).length}
             </p>
             <p className="text-sm text-gray-600 mb-2">Resolved Today</p>
             <p className="text-xs text-green-600">All systems stable</p>
@@ -265,7 +270,7 @@ export default function Alerts() {
             </div>
           ) : (
             filteredAlerts.map((alert) => (
-              <div key={alert.id} className="p-6 hover:bg-gray-50">
+              <div key={alert.id} className={`p-6 hover:bg-gray-50 ${isFromParked(alert) ? 'opacity-50' : ''}`}>
                 <div className="flex items-start space-x-4">
                   <div className="flex-shrink-0">
                     {getSeverityIcon(alert.severity)}
@@ -281,6 +286,9 @@ export default function Alerts() {
                       }`}>
                         {alert.resolved ? 'Resolved' : 'Active'}
                       </span>
+                      {isFromParked(alert) && (
+                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">Device parked</span>
+                      )}
                     </div>
                     <p className="text-sm font-medium text-gray-900 mb-1">{alert.message}</p>
                     <div className="flex items-center space-x-4 text-sm text-gray-500">
@@ -324,7 +332,7 @@ export default function Alerts() {
                 <span className="text-sm text-gray-600">High Priority</span>
               </div>
               <span className="text-sm font-medium text-gray-900">
-                {filteredAlerts.filter(a => a.severity === 'high').length}
+                {countedAlerts.filter(a => a.severity === 'high').length}
               </span>
             </div>
             <div className="flex items-center justify-between">
@@ -333,7 +341,7 @@ export default function Alerts() {
                 <span className="text-sm text-gray-600">Medium Priority</span>
               </div>
               <span className="text-sm font-medium text-gray-900">
-                {filteredAlerts.filter(a => a.severity === 'medium').length}
+                {countedAlerts.filter(a => a.severity === 'medium').length}
               </span>
             </div>
             <div className="flex items-center justify-between">
@@ -342,7 +350,7 @@ export default function Alerts() {
                 <span className="text-sm text-gray-600">Low Priority</span>
               </div>
               <span className="text-sm font-medium text-gray-900">
-                {filteredAlerts.filter(a => a.severity === 'low').length}
+                {countedAlerts.filter(a => a.severity === 'low').length}
               </span>
             </div>
           </div>

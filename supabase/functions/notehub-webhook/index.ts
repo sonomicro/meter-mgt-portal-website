@@ -184,7 +184,7 @@ Deno.serve(async (req) => {
     // Find the device by Notehub device UID
     const { data: foundDevices, error: deviceError } = await supabaseClient
       .from('devices')
-      .select('id, name, tenant_id, battery_present')
+      .select('id, name, tenant_id, battery_present, parked')
       .eq('notehub_device_uid', payload.device)
       .limit(1)
     let devices = foundDevices
@@ -403,7 +403,7 @@ Deno.serve(async (req) => {
         healthUpdates.signal_strength = payload.body.bars;
 
         // Check for low signal strength alert
-        if (payload.body.bars <= 1) {
+        if (payload.body.bars <= 1 && !device.parked) {
           const { error: alertError } = await supabaseClient
             .from('alerts')
             .insert({
@@ -705,18 +705,22 @@ Deno.serve(async (req) => {
         message = details ? `Alarm: ${details}` : 'Device alarm triggered';
       }
 
-      // Insert alert into database
-      const { error: alertError } = await supabaseClient
-        .from('alerts')
-        .insert({
-          device_id: device.id,
-          type: alertType,
-          message: message,
-          severity: severity,
-          created_at: timestamp
-        })
+      // A parked device is out of service: its alarms are not alerts
+      const { error: alertError } = device.parked
+        ? { error: null }
+        : await supabaseClient
+            .from('alerts')
+            .insert({
+              device_id: device.id,
+              type: alertType,
+              message: message,
+              severity: severity,
+              created_at: timestamp
+            })
 
-      if (alertError) {
+      if (device.parked) {
+        console.log(`Ignored alarm from parked device ${device.name}: ${message}`)
+      } else if (alertError) {
         console.error('Error inserting alarm alert:', alertError)
       } else {
         console.log(`Stored alarm for device ${device.name}: ${message}`)

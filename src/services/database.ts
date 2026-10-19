@@ -228,7 +228,8 @@ export class TenantService {
       const { data: deviceIds } = await supabase
         .from('devices')
         .select('id')
-        .eq('tenant_id', tenantId);
+        .eq('tenant_id', tenantId)
+        .eq('parked', false);
 
       if (deviceIds && deviceIds.length > 0) {
         const deviceIdArray = deviceIds.map(device => device.id);
@@ -833,7 +834,7 @@ export class DeviceDataService {
     // Find device by Notehub device ID
     const { data: devices } = await supabase
       .from('devices')
-      .select('id, battery_present')
+      .select('id, battery_present, parked')
       .eq('notehub_device_uid', waterFlowData.deviceId);
 
     if (!devices || devices.length === 0) {
@@ -862,7 +863,9 @@ export class DeviceDataService {
     });
 
     // Check for alerts
-    await this.checkForAlerts(device.id, waterFlowData);
+    if (!device.parked) {
+      await this.checkForAlerts(device.id, waterFlowData);
+    }
   }
 
   // Check for alerts based on device data

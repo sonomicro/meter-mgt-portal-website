@@ -909,15 +909,22 @@ export default function TenantSettings() {
               };
 
               return (
-                <div key={device.id} className="p-3 border border-gray-200 rounded-lg space-y-3">
+                <fieldset
+                  key={device.id}
+                  disabled={!!device.parked}
+                  className={`p-3 border border-gray-200 rounded-lg space-y-3 ${device.parked ? 'opacity-50' : ''}`}
+                >
                   <div className="flex items-center justify-between">
-                    <p className="text-sm font-medium text-gray-900">{device.name}</p>
+                    <p className="text-sm font-medium text-gray-900">
+                      {device.alias || device.name}
+                      {device.parked && <span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-700">Parked, alerts paused</span>}
+                    </p>
                     <p className="text-xs text-gray-500">{device.location}</p>
                   </div>
 
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium text-gray-600">Leak (Continuous Flow) Alert</span>
-                    <label className="relative inline-flex items-center cursor-pointer">
+                    <label className={`relative inline-flex items-center ${device.parked ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
                       <input
                         type="checkbox"
                         checked={isEnabled}
@@ -951,7 +958,7 @@ export default function TenantSettings() {
 
                   <div className="flex items-center justify-between border-t border-gray-100 pt-3">
                     <span className="text-xs font-medium text-gray-600">No-Flow Alert</span>
-                    <label className="relative inline-flex items-center cursor-pointer">
+                    <label className={`relative inline-flex items-center ${device.parked ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
                       <input
                         type="checkbox"
                         checked={isNoFlowEnabled}
@@ -1002,7 +1009,7 @@ export default function TenantSettings() {
                       </button>
                     </div>
                   )}
-                </div>
+                </fieldset>
               );
             })}
           </div>
