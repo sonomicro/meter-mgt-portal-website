@@ -4,6 +4,7 @@ import { TrendingUp, Users, Activity, Globe, Server, Zap, Database, Clock, HardD
 import { TenantService, DeviceService } from '../../services/database';
 import { getDeviceUsageStats, getDataUsageTrends, formatBytes } from '../../services/dataUsage';
 import type { Database as SupabaseDatabase } from '../../lib/supabase';
+import { averageBattery } from '../../lib/battery';
 
 type Tenant = SupabaseDatabase['public']['Tables']['tenants']['Row'];
 type Device = SupabaseDatabase['public']['Tables']['devices']['Row'];
@@ -119,9 +120,7 @@ const SystemAnalytics: React.FC = () => {
 
   const totalDataUsage = devices.reduce((sum, device) => sum + (device.total_usage || 0), 0);
   const estimatedDataPointsPerDay = totalDevices * 288;
-  const avgBatteryLevel = devices.length > 0
-    ? Math.round(devices.reduce((sum, d) => sum + (d.battery_level || 0), 0) / devices.length)
-    : 0;
+  const avgBatteryLevel = averageBattery(devices.filter(d => d.status !== 'parked')) ?? 0;
 
   const platformMetrics = calculatePlatformMetrics();
   const deviceTypes = calculateDeviceTypeDistribution();

@@ -317,7 +317,7 @@ export class DeviceService {
             const updates: Database['public']['Tables']['devices']['Update'] = {
               status: isOnline ? 'online' : 'offline',
               last_seen: notehubDevice.last_activity,
-              battery_level: batteryLevel,
+              ...((supabaseDevice as Device).battery_present == null && { battery_level: batteryLevel }),
             };
 
             // Prefer tower_location over GPS location for better accuracy
@@ -617,7 +617,7 @@ export class DeviceService {
       const updates: Database['public']['Tables']['devices']['Update'] = {
         status: health.isOnline ? 'online' : 'offline',
         last_seen: health.lastSeen,
-        battery_level: health.batteryLevel,
+        ...(device.battery_present == null && { battery_level: health.batteryLevel }),
       };
 
       // Update location if available
@@ -833,7 +833,7 @@ export class DeviceDataService {
     // Find device by Notehub device ID
     const { data: devices } = await supabase
       .from('devices')
-      .select('id')
+      .select('id, battery_present')
       .eq('notehub_device_uid', waterFlowData.deviceId);
 
     if (!devices || devices.length === 0) {
@@ -856,7 +856,7 @@ export class DeviceDataService {
     await DeviceService.updateDevice(device.id, {
       flow_rate: waterFlowData.flowRate,
       total_usage: waterFlowData.totalVolume,
-      battery_level: waterFlowData.batteryLevel,
+      ...(device.battery_present == null && { battery_level: waterFlowData.batteryLevel }),
       last_seen: waterFlowData.timestamp,
       status: 'online'
     });

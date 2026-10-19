@@ -3,6 +3,7 @@ import { Droplets, Wifi, AlertTriangle, Battery } from 'lucide-react';
 import { DeviceService } from '../../services/database';
 import { getCurrentUser } from '../../services/auth';
 import type { Database } from '../../lib/supabase';
+import { averageBattery, batteryLabel, hasBatteryBoard } from '../../lib/battery';
 
 type Device = Database['public']['Tables']['devices']['Row'];
 
@@ -44,6 +45,7 @@ export default function TenantDashboard() {
   const onlineDevices = devices.filter(d => d.status === 'online').length;
   const inService = devices.filter(d => d.status !== 'parked');
   const inServiceDevices = inService.length;
+  const avgBattery = averageBattery(inService);
 
   // Count devices that are offline or in maintenance as alerts
   const activeAlerts = devices.filter(d => d.status === 'offline' || d.status === 'maintenance').length;
@@ -72,7 +74,7 @@ export default function TenantDashboard() {
     },
     {
       label: 'Avg Battery',
-      value: inServiceDevices > 0 ? `${Math.round(inService.reduce((sum, d) => sum + d.battery_level, 0) / inServiceDevices)}%` : '0%',
+      value: avgBattery === null ? '—' : `${avgBattery}%`,
       change: 'Good condition',
       icon: Battery,
       color: 'green'
@@ -147,7 +149,7 @@ export default function TenantDashboard() {
                     ) : (
                       <>
                         <p className="text-sm font-medium text-gray-900">{Number(device.avg_flow_rate ?? 0).toFixed(2)}L/min</p>
-                        <p className="text-xs text-gray-500">{device.battery_level}% battery</p>
+                        <p className="text-xs text-gray-500">{hasBatteryBoard(device) ? `${batteryLabel(device)} battery` : 'No battery'}</p>
                       </>
                     )}
                   </div>

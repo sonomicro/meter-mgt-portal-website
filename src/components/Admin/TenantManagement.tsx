@@ -6,6 +6,7 @@ import { DeviceFleetAssignmentService } from '../../services/deviceFleetAssignme
 import { supabase } from '../../lib/supabase';
 import type { Database as SupabaseDatabase } from '../../lib/supabase';
 import type { User } from '../../types';
+import { batteryLabel, hasBatteryBoard } from '../../lib/battery';
 
 type Tenant = SupabaseDatabase['public']['Tables']['tenants']['Row'];
 type Device = SupabaseDatabase['public']['Tables']['devices']['Row'];
@@ -794,7 +795,7 @@ export default function TenantManagement({ user }: TenantManagementProps) {
                             }`}>
                               {device.status}
                             </p>
-                            <p className="text-xs text-gray-500">{device.battery_level}% battery</p>
+                            <p className="text-xs text-gray-500">{hasBatteryBoard(device) ? `${batteryLabel(device)} battery` : 'No battery'}</p>
                           </div>
                           <button
                             onClick={() => handleUnassignDevice(device.id)}
@@ -1150,7 +1151,7 @@ export default function TenantManagement({ user }: TenantManagementProps) {
                       }`}>
                         {device.status}
                       </p>
-                      <p className="text-xs text-gray-500">{device.battery_level}% battery</p>
+                      <p className="text-xs text-gray-500">{hasBatteryBoard(device) ? `${batteryLabel(device)} battery` : 'No battery'}</p>
                     </div>
                   </div>
                 ))}

@@ -104,7 +104,7 @@ export interface Database {
           status: 'online' | 'offline' | 'maintenance' | 'parked';
           firmware_version: string;
           last_seen: string;
-          battery_level: number;
+          battery_level: number | null;
           flow_rate: number;
           avg_flow_rate: number | null;
           total_usage: number;
@@ -128,6 +128,8 @@ export interface Database {
           volume_fixed_since: string | null;
           parked: boolean;
           parked_at: string | null;
+          battery_present: boolean | null;
+          battery_board: string | null;
           created_at: string;
         };
         Insert: {
@@ -141,7 +143,7 @@ export interface Database {
           status?: 'online' | 'offline' | 'maintenance';
           firmware_version?: string;
           last_seen?: string;
-          battery_level?: number;
+          battery_level?: number | null;
           flow_rate?: number;
           avg_flow_rate?: number | null;
           total_usage?: number;
@@ -164,6 +166,8 @@ export interface Database {
           quality_updated_at?: string | null;
           volume_fixed_since?: string | null;
           parked?: boolean;
+          battery_present?: boolean | null;
+          battery_board?: string | null;
           parked_at?: string | null;
           created_at?: string;
         };
@@ -178,7 +182,7 @@ export interface Database {
           status?: 'online' | 'offline' | 'maintenance';
           firmware_version?: string;
           last_seen?: string;
-          battery_level?: number;
+          battery_level?: number | null;
           flow_rate?: number;
           avg_flow_rate?: number | null;
           total_usage?: number;
@@ -201,6 +205,8 @@ export interface Database {
           quality_updated_at?: string | null;
           volume_fixed_since?: string | null;
           parked?: boolean;
+          battery_present?: boolean | null;
+          battery_board?: string | null;
           parked_at?: string | null;
           created_at?: string;
         };

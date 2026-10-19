@@ -4,6 +4,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { supabaseServiceRole } from '../../lib/supabase';
 import { getCurrentUser } from '../../services/auth';
 import type { Database } from '../../lib/supabase';
+import { batteryLabel, batteryReading } from '../../lib/battery';
 
 type Device = Database['public']['Tables']['devices']['Row'];
 type DeviceData = Database['public']['Tables']['device_data']['Row'];
@@ -795,7 +796,7 @@ export default function WaterUsage() {
                 {devices.map(device => {
                   const isOnline = device.status === 'online';
                   const isParked = device.status === 'parked';
-                  const batteryLevel = device.battery_level || 0;
+                  const batteryLevel = batteryReading(device);
                   const lastSeenText = device.last_seen
                     ? new Date(device.last_seen).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
                     : 'Never';
@@ -814,9 +815,9 @@ export default function WaterUsage() {
                         <div className="flex items-center justify-between">
                           <span className="text-gray-600">Battery</span>
                           <span className={`font-medium ${
-                            batteryLevel > 50 ? 'text-green-600' : batteryLevel > 20 ? 'text-amber-600' : 'text-red-600'
+                            batteryLevel === null ? 'text-gray-500' : batteryLevel > 50 ? 'text-green-600' : batteryLevel > 20 ? 'text-amber-600' : 'text-red-600'
                           }`}>
-                            {batteryLevel}%
+                            {batteryLabel(device)}
                           </span>
                         </div>
                         <div className="flex items-center justify-between">

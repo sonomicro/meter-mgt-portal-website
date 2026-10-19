@@ -4,6 +4,7 @@ import { EnvironmentCell } from '../Shared/DeviceTelemetry';
 import { DeviceService, FleetGroupService } from '../../services/database';
 import { getCurrentUser } from '../../services/auth';
 import type { Database } from '../../lib/supabase';
+import { batteryLabel, batteryReading, hasBatteryBoard } from '../../lib/battery';
 import type { User } from '../../types';
 
 type Device = Database['public']['Tables']['devices']['Row'];
@@ -444,10 +445,17 @@ export default function FleetManagement({ user }: FleetManagementProps) {
   const handleSaveAdvancedSettings = async () => {
     if (!selectedDevice) return;
 
+    // Without a battery board the battery section is not used: keep the
+    // stored values and send nothing for it
+    const isBatteryKey = (key: string) => key.startsWith('battery.') || key.startsWith('settings.battery.');
+    const settingsToSave = hasBatteryBoard(selectedDevice)
+      ? advancedSettings
+      : Object.fromEntries(Object.entries(advancedSettings).filter(([key]) => !isBatteryKey(key)));
+
     try {
       // Update local database with notehub config
       await DeviceService.updateDevice(selectedDevice.id, {
-        notehub_config: advancedSettings
+        notehub_config: { ...(selectedDevice.notehub_config as Record<string, unknown> || {}), ...settingsToSave }
       }, true);
 
       // Send environment variables to Notehub via device command
@@ -455,7 +463,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
         const environmentVariables: Record<string, string> = {};
 
         // Convert all settings to string format for Notehub
-        Object.entries(advancedSettings).forEach(([key, value]) => {
+        Object.entries(settingsToSave).forEach(([key, value]) => {
           if (typeof value === 'boolean') {
             environmentVariables[key] = value ? 'true' : 'false';
           } else if (typeof value === 'number') {
@@ -513,7 +521,8 @@ export default function FleetManagement({ user }: FleetManagementProps) {
     }
   };
 
-  const getBatteryColor = (level: number) => {
+  const getBatteryColor = (level: number | null) => {
+    if (level === null) return 'text-gray-400';
     if (level > 60) return 'text-green-600';
     if (level > 30) return 'text-yellow-600';
     return 'text-red-600';
@@ -783,8 +792,8 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                     </td>
                     <td className="py-4 px-6">
                       <div className="flex items-center space-x-2">
-                        <Battery className={`h-4 w-4 ${getBatteryColor(device.status === 'offline' ? 0 : device.battery_level)}`} />
-                        <span className="text-sm font-medium text-gray-900">{device.status === 'offline' ? 0 : device.battery_level}%</span>
+                        <Battery className={`h-4 w-4 ${getBatteryColor(device.status === 'offline' ? 0 : batteryReading(device))}`} />
+                        <span className="text-sm font-medium text-gray-900">{device.status === 'offline' && hasBatteryBoard(device) ? '0%' : batteryLabel(device)}</span>
                       </div>
                     </td>
                     <td className="py-4 px-6">
@@ -1198,11 +1207,17 @@ export default function FleetManagement({ user }: FleetManagementProps) {
               </div>
 
               {/* Battery Settings */}
-              <div className="bg-yellow-50 p-4 rounded-lg">
+              <fieldset
+                disabled={!hasBatteryBoard(selectedDevice)}
+                className={`bg-yellow-50 p-4 rounded-lg ${hasBatteryBoard(selectedDevice) ? '' : 'opacity-50'}`}
+              >
                 <h4 className="font-medium text-gray-900 mb-3 flex items-center">
                   <Battery className="h-5 w-5 text-yellow-600 mr-2" />
                   Battery Configuration
                 </h4>
+                {!hasBatteryBoard(selectedDevice) && (
+                  <p className="text-sm text-gray-600 mb-3">No battery board in this device. These settings are not used and are not saved.</p>
+                )}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 mb-2">
@@ -1248,7 +1263,7 @@ export default function FleetManagement({ user }: FleetManagementProps) {
                     />
                   </div>
                 </div>
-              </div>
+              </fieldset>
 
               {/* Storage Settings */}
               <div className="bg-green-50 p-4 rounded-lg">

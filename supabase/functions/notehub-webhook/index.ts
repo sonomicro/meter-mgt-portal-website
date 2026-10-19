@@ -49,6 +49,9 @@ interface NotehubWebhookPayload {
     // battery.qo (battery_controller.c) — current firmware only
     battery_soc_pct?: number;
     battery_voltage_mv?: number;
+    // fw 2.8.0+: soc/voltage only sent with a battery board and monitoring on
+    battery_present?: boolean;
+    battery_board?: string;
     // settings.qo (settings_controller.c) — compact device identity for NFC
     settings_nfc_short_id?: number;
     // env.qo (env_controller.c, SHT40 on carrier E) — values omitted when !env_valid
@@ -181,7 +184,7 @@ Deno.serve(async (req) => {
     // Find the device by Notehub device UID
     const { data: foundDevices, error: deviceError } = await supabaseClient
       .from('devices')
-      .select('id, name, tenant_id')
+      .select('id, name, tenant_id, battery_present')
       .eq('notehub_device_uid', payload.device)
       .limit(1)
     let devices = foundDevices
@@ -275,7 +278,7 @@ Deno.serve(async (req) => {
 
       const deviceUpdates: any = {}
 
-      if (payload.body.battery_level !== undefined) {
+      if (payload.body.battery_level !== undefined && device.battery_present == null) {
         deviceUpdates.battery_level = payload.body.battery_level
       }
 
@@ -388,10 +391,12 @@ Deno.serve(async (req) => {
         batteryLevel = Math.max(0, Math.min(100, batteryLevel));
       }
 
+      // Notecard supply voltage is not a battery level once the firmware
+      // reports battery presence itself (battery.qo battery_present)
       const healthUpdates: any = {
         status: 'online',
         last_seen: timestamp,
-        battery_level: batteryLevel
+        ...(device.battery_present == null && { battery_level: batteryLevel })
       };
 
       if (payload.body.bars !== undefined) {
@@ -430,16 +435,28 @@ Deno.serve(async (req) => {
     }
 
     // Handle app-level battery telemetry (battery_controller.c battery.qo)
-    if (payload.file === 'battery.qo' && payload.body.battery_soc_pct !== undefined) {
+    if (payload.file === 'battery.qo' &&
+        (payload.body.battery_present !== undefined || payload.body.battery_soc_pct !== undefined)) {
       const timestamp = new Date(payload.when * 1000).toISOString()
+
+      const batteryUpdates: any = payload.body.battery_present !== undefined
+        ? {
+            battery_present: payload.body.battery_present,
+            battery_board: payload.body.battery_board ?? null,
+            battery_level: payload.body.battery_soc_pct ?? null,
+            battery_voltage_mv: payload.body.battery_voltage_mv ?? null
+          }
+        : {
+            battery_level: payload.body.battery_soc_pct,
+            ...(payload.body.battery_voltage_mv !== undefined && { battery_voltage_mv: payload.body.battery_voltage_mv })
+          }
 
       const { error: updateError } = await supabaseClient
         .from('devices')
         .update({
           status: 'online',
           last_seen: timestamp,
-          battery_level: payload.body.battery_soc_pct,
-          ...(payload.body.battery_voltage_mv !== undefined && { battery_voltage_mv: payload.body.battery_voltage_mv })
+          ...batteryUpdates
         })
         .eq('id', device.id)
 
@@ -447,7 +464,7 @@ Deno.serve(async (req) => {
         console.error('Error updating device battery:', updateError)
       }
 
-      console.log(`Updated battery level for device ${device.name}: ${payload.body.battery_soc_pct}%`)
+      console.log(`Updated battery for device ${device.name}: board ${payload.body.battery_board ?? '?'}, ${payload.body.battery_soc_pct ?? '-'}%`)
     }
 
     // Ambient temperature/humidity (env_controller.c env.qo). The values are

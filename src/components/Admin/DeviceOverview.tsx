@@ -5,6 +5,7 @@ import { DeviceService, TenantService } from '../../services/database';
 import { DeviceFleetAssignmentService } from '../../services/deviceFleetAssignment';
 import { supabaseServiceRole } from '../../lib/supabase';
 import type { Database } from '../../lib/supabase';
+import { batteryLabel, batteryReading } from '../../lib/battery';
 
 type Device = Database['public']['Tables']['devices']['Row'];
 type Tenant = Database['public']['Tables']['tenants']['Row'];
@@ -511,7 +512,8 @@ export default function DeviceOverview() {
     }
   };
 
-  const getBatteryColor = (level: number) => {
+  const getBatteryColor = (level: number | null) => {
+    if (level === null) return 'text-gray-400';
     if (level > 60) return 'text-green-600';
     if (level > 30) return 'text-yellow-600';
     return 'text-red-600';
@@ -816,8 +818,8 @@ export default function DeviceOverview() {
                       </td>
                       <td className="py-4 px-6">
                         <div className="flex items-center space-x-2">
-                          <Battery className={`h-4 w-4 ${getBatteryColor(device.battery_level)}`} />
-                          <span className="text-sm font-medium text-gray-900">{device.battery_level}%</span>
+                          <Battery className={`h-4 w-4 ${getBatteryColor(batteryReading(device))}`} />
+                          <span className="text-sm font-medium text-gray-900">{batteryLabel(device)}</span>
                         </div>
                       </td>
                       <td className="py-4 px-6">
