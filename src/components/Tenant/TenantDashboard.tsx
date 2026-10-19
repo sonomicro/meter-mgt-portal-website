@@ -42,7 +42,8 @@ export default function TenantDashboard() {
 
   const totalUsage = devices.reduce((sum, device) => sum + device.total_usage, 0);
   const onlineDevices = devices.filter(d => d.status === 'online').length;
-  const inServiceDevices = devices.filter(d => d.status !== 'parked').length;
+  const inService = devices.filter(d => d.status !== 'parked');
+  const inServiceDevices = inService.length;
 
   // Count devices that are offline or in maintenance as alerts
   const activeAlerts = devices.filter(d => d.status === 'offline' || d.status === 'maintenance').length;
@@ -71,7 +72,7 @@ export default function TenantDashboard() {
     },
     {
       label: 'Avg Battery',
-      value: devices.length > 0 ? `${Math.round(devices.reduce((sum, d) => sum + d.battery_level, 0) / devices.length)}%` : '0%',
+      value: inServiceDevices > 0 ? `${Math.round(inService.reduce((sum, d) => sum + d.battery_level, 0) / inServiceDevices)}%` : '0%',
       change: 'Good condition',
       icon: Battery,
       color: 'green'

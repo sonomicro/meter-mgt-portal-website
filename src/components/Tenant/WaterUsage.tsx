@@ -354,11 +354,12 @@ export default function WaterUsage() {
       const globalNoFlowEnabled = globalSetting?.no_flow_enabled !== false;
 
       for (const device of userDevices) {
+        if (device.status === 'parked') continue;
+
         // Check device-specific settings, fall back to global
         const deviceSetting = (leakSettings || []).find(s => s.device_id === device.id);
         const isEnabled = deviceSetting ? deviceSetting.enabled : globalEnabled;
-        const isNoFlowEnabled = device.status !== 'parked' &&
-          (deviceSetting ? deviceSetting.no_flow_enabled : globalNoFlowEnabled);
+        const isNoFlowEnabled = deviceSetting ? deviceSetting.no_flow_enabled : globalNoFlowEnabled;
 
         // Skip if neither check applies to this device
         if (!isEnabled && !isNoFlowEnabled) continue;
@@ -447,6 +448,7 @@ export default function WaterUsage() {
       });
 
   const totalUsage = filteredData.reduce((sum, day) => sum + day.usage, 0);
+  const inServiceCount = devices.filter(d => d.status !== 'parked').length;
   const avgDaily = filteredData.length > 0 ? totalUsage / filteredData.length : 0;
   const trend = filteredData.length >= 2
     ? filteredData[filteredData.length - 1]?.usage > filteredData[0]?.usage
@@ -718,7 +720,7 @@ export default function WaterUsage() {
                 <span className="text-sm text-gray-600">Device Status</span>
                 <WifiOff className="h-5 w-5 text-gray-500" />
               </div>
-              <p className="text-3xl font-bold text-gray-900">{devices.length - kpiData.offlineDevices}/{devices.length}</p>
+              <p className="text-3xl font-bold text-gray-900">{inServiceCount - kpiData.offlineDevices}/{inServiceCount}</p>
               <p className="text-sm text-gray-500 mt-2">
                 {kpiData.offlineDevices > 0 ? `${kpiData.offlineDevices} offline` : 'All online'}
               </p>
