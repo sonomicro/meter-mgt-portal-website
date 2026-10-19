@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Download, TrendingUp, TrendingDown, BarChart3, FileText, Filter, Droplets, Activity, AlertTriangle, WifiOff, Clock, Zap, Thermometer } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { Calendar, Download, TrendingUp, TrendingDown, BarChart3, FileText, Filter, Droplets, Activity, AlertTriangle, WifiOff, Clock, Zap, Thermometer, Gauge } from 'lucide-react';
+import { Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, Area } from 'recharts';
 import { supabaseServiceRole } from '../../lib/supabase';
 import { getCurrentUser } from '../../services/auth';
 import type { Database } from '../../lib/supabase';
@@ -16,11 +16,170 @@ interface DailyUsage {
   device: string;
 }
 
+// One env.qo note. The *_avg/min/max cover the period_s before `time` (all
+// samples since the previous note); older firmware only sent the snapshot,
+// which is then used as the average with no range.
 interface EnvPoint {
   time: number;
-  temperature_c: number;
-  humidity_rh: number;
+  period_s: number | null;
+  samples: number | null;
+  temperature_avg: number | null;
+  temperature_range: [number, number] | null;
+  humidity_avg: number | null;
+  humidity_range: [number, number] | null;
 }
+
+interface EnvRow {
+  timestamp: string;
+  temperature_c: number | null;
+  humidity_rh: number | null;
+  temperature_min_c: number | null;
+  temperature_max_c: number | null;
+  temperature_avg_c: number | null;
+  humidity_min_rh: number | null;
+  humidity_max_rh: number | null;
+  humidity_avg_rh: number | null;
+  samples: number | null;
+  period_s: number | null;
+}
+
+const num = (v: number | null) => (v === null || v === undefined ? null : Number(v));
+
+const toEnvPoint = (r: EnvRow): EnvPoint => {
+  const range = (lo: number | null, hi: number | null): [number, number] | null =>
+    lo === null || hi === null ? null : [Number(lo), Number(hi)];
+  return {
+    time: new Date(r.timestamp).getTime(),
+    period_s: r.period_s,
+    samples: r.samples,
+    temperature_avg: num(r.temperature_avg_c) ?? num(r.temperature_c),
+    temperature_range: range(r.temperature_min_c, r.temperature_max_c),
+    humidity_avg: num(r.humidity_avg_rh) ?? num(r.humidity_rh),
+    humidity_range: range(r.humidity_min_rh, r.humidity_max_rh)
+  };
+};
+
+// High/low over the whole range and the mean weighted by samples per note
+// (a note without a sample count weighs as one).
+const envSummary = (points: EnvPoint[], key: 'temperature' | 'humidity') => {
+  let high: number | null = null;
+  let low: number | null = null;
+  let sum = 0;
+  let weight = 0;
+  for (const p of points) {
+    const avg = p[`${key}_avg`];
+    const range = p[`${key}_range`];
+    if (avg === null) continue;
+    const lo = range ? range[0] : avg;
+    const hi = range ? range[1] : avg;
+    high = high === null || hi > high ? hi : high;
+    low = low === null || lo < low ? lo : low;
+    const w = p.samples && p.samples > 0 ? p.samples : 1;
+    sum += avg * w;
+    weight += w;
+  }
+  return { high, low, avg: weight > 0 ? sum / weight : null };
+};
+
+// One quality.qo note: means over the cycles since the previous note.
+interface QualityPoint {
+  time: number;
+  cycles: number | null;
+  score: number | null;
+  error_pct: number | null;
+  amp: number | null;
+  lock: number | null;
+  rep: number | null;
+  plaus: number | null;
+  missed: number | null;
+  reason: number | null;
+}
+
+interface QualityRow {
+  timestamp: string;
+  interval_cycles: number | null;
+  interval_mean_score: number | null;
+  interval_error_pct: number | null;
+  interval_sub_amp: number | null;
+  interval_sub_lock: number | null;
+  interval_sub_rep: number | null;
+  interval_sub_plaus: number | null;
+  interval_missed_blocks: number | null;
+  reason_dominant: number | null;
+}
+
+const toQualityPoint = (r: QualityRow): QualityPoint => ({
+  time: new Date(r.timestamp).getTime(),
+  cycles: num(r.interval_cycles),
+  score: num(r.interval_mean_score),
+  error_pct: num(r.interval_error_pct),
+  amp: num(r.interval_sub_amp),
+  lock: num(r.interval_sub_lock),
+  rep: num(r.interval_sub_rep),
+  plaus: num(r.interval_sub_plaus),
+  missed: num(r.interval_missed_blocks),
+  reason: r.reason_dominant
+});
+
+const SUB_SCORES = [
+  { key: 'amp', label: 'Signal strength', color: '#2563eb', hint: 'Echo amplitude. Falls with fouling, poor transducer coupling or air in the pipe.' },
+  { key: 'lock', label: 'Signal lock', color: '#7c3aed', hint: 'Whether upstream and downstream echoes stay locked together. Falls with cycle slips.' },
+  { key: 'rep', label: 'Stability', color: '#0891b2', hint: 'How repeatable consecutive readings are. Falls with noise or unstable coupling.' },
+  { key: 'plaus', label: 'Plausibility', color: '#d97706', hint: 'Whether time-of-flight and flow are in the expected range. Falls with an empty pipe or wrong pipe data.' }
+] as const;
+
+// Reason codes of the meter's quality stream (sono_host_gui core/reason_codes.py).
+const QUALITY_REASONS: Record<number, string> = {
+  0x00: 'Healthy',
+  0x01: 'Warming up',
+  0x02: 'No signal',
+  0x03: 'Signal processing error',
+  0x04: 'Clock fault',
+  0x05: 'Capture failed',
+  0x06: 'Measurement overran its period',
+  0x10: 'Signal clipped (gain too high)',
+  0x11: 'Weak signal (check coupling)',
+  0x12: 'Gain at maximum (check mounting)',
+  0x13: 'Signal near noise floor',
+  0x20: 'Signal lock slipped',
+  0x21: 'Searching for signal',
+  0x22: 'Channels drifting apart',
+  0x30: 'Unstable readings',
+  0x40: 'Time-of-flight out of range (check pipe data)',
+  0x41: 'Implausible flow rate'
+};
+
+const qualityReasonLabel = (code: number | null) =>
+  code === null ? '—' : QUALITY_REASONS[code] ?? `Code 0x${code.toString(16).padStart(2, '0')}`;
+
+// Means weighted by cycles per note (a note without a count weighs as one);
+// `worst` is the lowest per-report score in the range.
+const qualitySummary = (points: QualityPoint[]) => {
+  const keys = ['score', 'error_pct', 'amp', 'lock', 'rep', 'plaus'] as const;
+  const sums = Object.fromEntries(keys.map(k => [k, { sum: 0, w: 0 }])) as Record<typeof keys[number], { sum: number; w: number }>;
+  let worst: number | null = null;
+  let missed = 0;
+  for (const p of points) {
+    const w = p.cycles && p.cycles > 0 ? p.cycles : 1;
+    for (const k of keys) {
+      const v = p[k];
+      if (v === null) continue;
+      sums[k].sum += v * w;
+      sums[k].w += w;
+    }
+    if (p.score !== null) worst = worst === null || p.score < worst ? p.score : worst;
+    missed += p.missed ?? 0;
+  }
+  const mean = (k: typeof keys[number]) => (sums[k].w > 0 ? sums[k].sum / sums[k].w : null);
+  return {
+    score: mean('score'),
+    errorPct: mean('error_pct'),
+    sub: { amp: mean('amp'), lock: mean('lock'), rep: mean('rep'), plaus: mean('plaus') },
+    worst,
+    missed,
+    reason: points.length > 0 ? points[points.length - 1].reason : null
+  };
+};
 
 interface DeviceUsagePercent {
   id: string;
@@ -105,6 +264,7 @@ export default function WaterUsage() {
   const [deviceUsageBreakdown, setDeviceUsageBreakdown] = useState<DeviceUsagePercent[]>([]);
   const [hourlyPatterns, setHourlyPatterns] = useState<HourlyPattern[]>([]);
   const [envData, setEnvData] = useState<EnvPoint[]>([]);
+  const [qualityData, setQualityData] = useState<QualityPoint[]>([]);
   const [leakAlerts, setLeakAlerts] = useState<LeakAlert[]>([]);
   const [noFlowAlerts, setNoFlowAlerts] = useState<NoFlowAlert[]>([]);
   const [leakDetectionSettings, setLeakDetectionSettings] = useState<LeakDetectionSetting[]>([]);
@@ -267,18 +427,24 @@ export default function WaterUsage() {
       if (envDeviceIds.length === 1) {
         const { data: envRows } = await supabaseServiceRole
           .from('device_env_data')
-          .select('timestamp, temperature_c, humidity_rh')
+          .select('timestamp, temperature_c, humidity_rh, temperature_min_c, temperature_max_c, temperature_avg_c, humidity_min_rh, humidity_max_rh, humidity_avg_rh, samples, period_s')
           .eq('device_id', envDeviceIds[0])
           .gte('timestamp', startDate.toISOString())
           .lte('timestamp', endDate.toISOString())
           .order('timestamp', { ascending: true });
-        setEnvData((envRows || []).map((r: { timestamp: string; temperature_c: number; humidity_rh: number }) => ({
-          time: new Date(r.timestamp).getTime(),
-          temperature_c: Number(r.temperature_c),
-          humidity_rh: Number(r.humidity_rh)
-        })));
+        setEnvData(((envRows || []) as EnvRow[]).map(toEnvPoint));
+
+        const { data: qualityRows } = await supabaseServiceRole
+          .from('device_quality_data')
+          .select('timestamp, interval_cycles, interval_mean_score, interval_error_pct, interval_sub_amp, interval_sub_lock, interval_sub_rep, interval_sub_plaus, interval_missed_blocks, reason_dominant')
+          .eq('device_id', envDeviceIds[0])
+          .gte('timestamp', startDate.toISOString())
+          .lte('timestamp', endDate.toISOString())
+          .order('timestamp', { ascending: true });
+        setQualityData(((qualityRows || []) as QualityRow[]).map(toQualityPoint).filter(p => p.score !== null));
       } else {
         setEnvData([]);
+        setQualityData([]);
       }
 
       // Calculate hourly patterns for heatmap (last 7 days only)
@@ -858,35 +1024,176 @@ export default function WaterUsage() {
           {/* Ambient temperature / humidity */}
           {envData.length > 0 && (
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-1">
                 <h3 className="text-lg font-semibold text-gray-900">Temperature & Humidity</h3>
                 <Thermometer className="h-5 w-5 text-gray-400" />
               </div>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={envData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="time"
-                      type="number"
-                      scale="time"
-                      domain={['dataMin', 'dataMax']}
-                      tickFormatter={(t) => new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                    />
-                    <YAxis yAxisId="temp" unit=" °C" />
-                    <YAxis yAxisId="rh" orientation="right" unit=" %" domain={[0, 100]} />
-                    <Tooltip
-                      labelFormatter={(t) => new Date(t as number).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                      formatter={(value: number, name: string) => [name === 'Temperature' ? `${value.toFixed(1)} °C` : `${value.toFixed(0)} %RH`, name]}
-                    />
-                    <Legend />
-                    <Line yAxisId="temp" type="monotone" dataKey="temperature_c" name="Temperature" stroke="#dc2626" strokeWidth={2} dot={false} />
-                    <Line yAxisId="rh" type="monotone" dataKey="humidity_rh" name="Humidity" stroke="#2563eb" strokeWidth={2} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+              <p className="text-sm text-gray-500 mb-4">
+                Line: average between cloud syncs. Band: lowest to highest reading in the same period (sampled every 10 s).
+              </p>
+              {([
+                { key: 'temperature', label: 'Temperature', unit: '°C', color: '#dc2626', digits: 1 },
+                { key: 'humidity', label: 'Humidity', unit: '%RH', color: '#2563eb', digits: 0 }
+              ] as const).map(({ key, label, unit, color, digits }) => {
+                const summary = envSummary(envData, key);
+                const fmt = (v: number | null) => (v === null ? '—' : `${v.toFixed(digits)} ${unit}`);
+                return (
+                  <div key={key} className="mb-6 last:mb-0">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+                      <h4 className="text-sm font-medium text-gray-900">{label}</h4>
+                      <div className="flex gap-4 text-sm">
+                        <span className="text-gray-600">High <strong className="text-gray-900">{fmt(summary.high)}</strong></span>
+                        <span className="text-gray-600">Low <strong className="text-gray-900">{fmt(summary.low)}</strong></span>
+                        <span className="text-gray-600">Average <strong className="text-gray-900">{fmt(summary.avg)}</strong></span>
+                      </div>
+                    </div>
+                    <div className="h-56">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart data={envData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis
+                            dataKey="time"
+                            type="number"
+                            scale="time"
+                            domain={['dataMin', 'dataMax']}
+                            tickFormatter={(t) => new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          />
+                          <YAxis unit={` ${unit}`} domain={key === 'humidity' ? [0, 100] : ['auto', 'auto']} />
+                          <Tooltip
+                            labelFormatter={(t, payload) => {
+                              const end = new Date(t as number);
+                              const p = payload?.[0]?.payload as EnvPoint | undefined;
+                              const fmtTime = (d: Date) => d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                              return p?.period_s
+                                ? `${fmtTime(new Date(end.getTime() - p.period_s * 1000))} – ${fmtTime(end)}${p.samples ? ` (${p.samples} readings)` : ''}`
+                                : fmtTime(end);
+                            }}
+                            formatter={(value: number | [number, number], name: string) => [
+                              Array.isArray(value)
+                                ? `${value[0].toFixed(digits)} – ${value[1].toFixed(digits)} ${unit}`
+                                : `${value.toFixed(digits)} ${unit}`,
+                              name
+                            ]}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey={`${key}_range`}
+                            name="Low – high"
+                            stroke="none"
+                            fill={color}
+                            fillOpacity={0.15}
+                            connectNulls
+                            isAnimationActive={false}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey={`${key}_avg`}
+                            name="Average"
+                            stroke={color}
+                            strokeWidth={2}
+                            dot={false}
+                            connectNulls
+                            isAnimationActive={false}
+                          />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
+
+          {/* Measurement health (quality.qo) */}
+          {qualityData.length > 0 && (() => {
+            const summary = qualitySummary(qualityData);
+            const pct = (v: number | null, digits = 0) => (v === null ? '—' : v.toFixed(digits));
+            const fmtTime = (d: Date) => d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            const timeAxis = (
+              <XAxis
+                dataKey="time"
+                type="number"
+                scale="time"
+                domain={['dataMin', 'dataMax']}
+                tickFormatter={(t) => new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              />
+            );
+            return (
+              <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className="text-lg font-semibold text-gray-900">Measurement Health</h3>
+                  <Gauge className="h-5 w-5 text-gray-400" />
+                </div>
+                <p className="text-sm text-gray-500 mb-4">
+                  The meter scores every measurement 0–100. Each point is the average between cloud syncs; the four lines show which part of the signal drives the overall score.
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                  <div>
+                    <p className="text-xs text-gray-500">Average score</p>
+                    <p className={`text-xl font-semibold ${summary.score === null ? 'text-gray-900' : qualityColor(summary.score)}`}>{pct(summary.score)}<span className="text-sm text-gray-500">/100</span></p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Worst report</p>
+                    <p className={`text-xl font-semibold ${summary.worst === null ? 'text-gray-900' : qualityColor(summary.worst)}`}>{pct(summary.worst)}<span className="text-sm text-gray-500">/100</span></p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Failed measurements</p>
+                    <p className="text-xl font-semibold text-gray-900">{pct(summary.errorPct, 1)}<span className="text-sm text-gray-500">%</span></p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Most frequent condition</p>
+                    <p className="text-sm font-medium text-gray-900 mt-1" title="Since the meter last started">{qualityReasonLabel(summary.reason)}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2 text-sm">
+                  {SUB_SCORES.map(s => (
+                    <span key={s.key} className="text-gray-600" title={s.hint}>
+                      <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: s.color }} />
+                      {s.label} <strong className="text-gray-900">{pct(summary.sub[s.key])}</strong>
+                    </span>
+                  ))}
+                  {summary.missed > 0 && (
+                    <span className="text-amber-700" title="Quality reports the meter did not process">{summary.missed} missed reports</span>
+                  )}
+                </div>
+                <div className="h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={qualityData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      {timeAxis}
+                      <YAxis domain={[0, 100]} />
+                      <Tooltip
+                        labelFormatter={(t, payload) => {
+                          const p = payload?.[0]?.payload as QualityPoint | undefined;
+                          return `${fmtTime(new Date(t as number))}${p?.cycles ? ` (${p.cycles} measurements)` : ''}`;
+                        }}
+                        formatter={(value: number, name: string) => [value.toFixed(0), name]}
+                      />
+                      <Line type="monotone" dataKey="score" name="Overall score" stroke="#111827" strokeWidth={2.5} dot={false} connectNulls isAnimationActive={false} />
+                      {SUB_SCORES.map(s => (
+                        <Line key={s.key} type="monotone" dataKey={s.key} name={s.label} stroke={s.color} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
+                      ))}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+                <h4 className="text-sm font-medium text-gray-900 mt-4 mb-2">Failed measurements</h4>
+                <div className="h-32">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={qualityData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      {timeAxis}
+                      <YAxis unit="%" domain={[0, (max: number) => Math.max(5, Math.ceil(max))]} />
+                      <Tooltip
+                        labelFormatter={(t) => fmtTime(new Date(t as number))}
+                        formatter={(value: number) => [`${value.toFixed(2)} %`, 'Failed']}
+                      />
+                      <Area type="monotone" dataKey="error_pct" name="Failed" stroke="#dc2626" fill="#dc2626" fillOpacity={0.15} connectNulls isAnimationActive={false} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Hourly Usage Heatmap */}
           {hourlyPatterns.length > 0 && (

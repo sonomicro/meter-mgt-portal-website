@@ -58,6 +58,15 @@ interface NotehubWebhookPayload {
     env_valid?: boolean;
     env_temperature_c?: number;
     env_humidity_rh?: number;
+    // fw 2.8.0+: every valid sample since the previous accepted env.qo
+    env_temperature_min_c?: number;
+    env_temperature_max_c?: number;
+    env_temperature_avg_c?: number;
+    env_humidity_min_rh?: number;
+    env_humidity_max_rh?: number;
+    env_humidity_avg_rh?: number;
+    env_samples?: number;
+    env_period_s?: number;
     // health.qo (health_controller.c)
     health_fw_version?: string;
     health_uptime_ms?: number;
@@ -73,6 +82,19 @@ interface NotehubWebhookPayload {
     quality_soak_reason_dominant?: number;
     quality_soak_reset_count?: number;
     quality_soak_stream_on?: boolean;
+    quality_soak_sub_amp_sum?: number;
+    quality_soak_sub_lock_sum?: number;
+    quality_soak_sub_rep_sum?: number;
+    quality_soak_sub_plaus_sum?: number;
+    quality_soak_sub_amp_min?: number;
+    quality_soak_sub_lock_min?: number;
+    quality_soak_sub_rep_min?: number;
+    quality_soak_sub_plaus_min?: number;
+    quality_soak_family_amp_hits?: number;
+    quality_soak_family_lock_hits?: number;
+    quality_soak_family_rep_hits?: number;
+    quality_soak_family_plaus_hits?: number;
+    quality_soak_missed_blocks?: number;
     // _health.qo (Notecard system health, not app telemetry)
     battery_level?: number;
     voltage?: number;
@@ -96,12 +118,20 @@ interface NotehubWebhookPayload {
   tower_lon?: number;
 }
 
+const SUB_SCORES = ['amp', 'lock', 'rep', 'plaus'] as const;
+type SubScore = typeof SUB_SCORES[number];
+
 interface QualityCounters {
   cycles: number;
   error_cycles: number;
   warmup_cycles: number;
   score_sum: number;
   reset_count: number | null;
+  sub_amp_sum?: number | null;
+  sub_lock_sum?: number | null;
+  sub_rep_sum?: number | null;
+  sub_plaus_sum?: number | null;
+  missed_blocks?: number | null;
 }
 
 // Per-interval quality from two cumulative quality.qo notes. The mean is over
@@ -116,7 +146,26 @@ function qualityInterval(cur: QualityCounters, prev: QualityCounters | null) {
   const meanScore = scored > 0 ? Math.round(((cur.score_sum - base.score_sum) / scored) * 10) / 10 : null;
   const errorPct = cycles > 0 ? Math.round(((cur.error_cycles - base.error_cycles) / cycles) * 10000) / 100 : null;
 
-  return { cycles: cycles > 0 ? cycles : null, meanScore, errorPct };
+  // A counter the previous note did not carry (older webhook rows) can only
+  // be diffed after a restart, when the base is zero anyway.
+  const delta = (key: keyof QualityCounters): number | null => {
+    const c = cur[key] as number | null | undefined;
+    const p = restarted ? 0 : (prev![key] as number | null | undefined);
+    return c == null || p == null ? null : c - p;
+  };
+  // Sub-scores are summed over every cycle, warm-up included (quality_soak.c).
+  const subMean = (k: SubScore) => {
+    const d = delta(`sub_${k}_sum`);
+    return d === null || cycles <= 0 ? null : Math.round((d / cycles) * 10) / 10;
+  };
+
+  return {
+    cycles: cycles > 0 ? cycles : null,
+    meanScore,
+    errorPct,
+    sub: Object.fromEntries(SUB_SCORES.map(k => [k, subMean(k)])) as Record<SubScore, number | null>,
+    missedBlocks: delta('missed_blocks')
+  };
 }
 
 // alarm.qo codes (sono_board sono_app/inc/alarm_codes.h — a wire contract)
@@ -467,11 +516,14 @@ Deno.serve(async (req) => {
       console.log(`Updated battery for device ${device.name}: board ${payload.body.battery_board ?? '?'}, ${payload.body.battery_soc_pct ?? '-'}%`)
     }
 
-    // Ambient temperature/humidity (env_controller.c env.qo). The values are
+    // Ambient temperature/humidity (env_controller.c env.qo). The snapshot is
     // omitted when env_valid is false (no sensor, or a failed read): keep the
-    // last good reading rather than overwrite it.
-    if (payload.file === 'env.qo' && payload.body.env_valid === true &&
-        payload.body.env_temperature_c !== undefined && payload.body.env_humidity_rh !== undefined) {
+    // last good reading rather than overwrite it. The period statistics are
+    // stored whenever the period had samples.
+    const envSnapshot = payload.body.env_valid === true &&
+      payload.body.env_temperature_c !== undefined && payload.body.env_humidity_rh !== undefined
+    const envPeriod = (payload.body.env_samples ?? 0) > 0
+    if (payload.file === 'env.qo' && (envSnapshot || envPeriod)) {
       const timestamp = new Date(payload.when * 1000).toISOString()
 
       const { error: envError } = await supabaseClient
@@ -479,8 +531,16 @@ Deno.serve(async (req) => {
         .upsert({
           device_id: device.id,
           timestamp: timestamp,
-          temperature_c: payload.body.env_temperature_c,
-          humidity_rh: payload.body.env_humidity_rh,
+          temperature_c: envSnapshot ? payload.body.env_temperature_c : null,
+          humidity_rh: envSnapshot ? payload.body.env_humidity_rh : null,
+          temperature_min_c: payload.body.env_temperature_min_c ?? null,
+          temperature_max_c: payload.body.env_temperature_max_c ?? null,
+          temperature_avg_c: payload.body.env_temperature_avg_c ?? null,
+          humidity_min_rh: payload.body.env_humidity_min_rh ?? null,
+          humidity_max_rh: payload.body.env_humidity_max_rh ?? null,
+          humidity_avg_rh: payload.body.env_humidity_avg_rh ?? null,
+          samples: payload.body.env_samples ?? null,
+          period_s: payload.body.env_period_s ?? null,
           notehub_event: payload.event || null
         }, { onConflict: 'device_id,notehub_event', ignoreDuplicates: true })
 
@@ -491,8 +551,10 @@ Deno.serve(async (req) => {
       const { error: updateError } = await supabaseClient
         .from('devices')
         .update({
-          ambient_temperature_c: payload.body.env_temperature_c,
-          ambient_humidity_rh: payload.body.env_humidity_rh,
+          ...(envSnapshot && {
+            ambient_temperature_c: payload.body.env_temperature_c,
+            ambient_humidity_rh: payload.body.env_humidity_rh
+          }),
           env_updated_at: timestamp,
           last_seen: timestamp
         })
@@ -560,12 +622,17 @@ Deno.serve(async (req) => {
         error_cycles: b.quality_soak_error_cycles ?? 0,
         warmup_cycles: b.quality_soak_warmup_cycles ?? 0,
         score_sum: b.quality_soak_score_sum ?? 0,
-        reset_count: b.quality_soak_reset_count ?? null
+        reset_count: b.quality_soak_reset_count ?? null,
+        sub_amp_sum: b.quality_soak_sub_amp_sum ?? null,
+        sub_lock_sum: b.quality_soak_sub_lock_sum ?? null,
+        sub_rep_sum: b.quality_soak_sub_rep_sum ?? null,
+        sub_plaus_sum: b.quality_soak_sub_plaus_sum ?? null,
+        missed_blocks: b.quality_soak_missed_blocks ?? null
       }
 
       const { data: prevRows } = await supabaseClient
         .from('device_quality_data')
-        .select('cycles, error_cycles, warmup_cycles, score_sum, reset_count')
+        .select('cycles, error_cycles, warmup_cycles, score_sum, reset_count, sub_amp_sum, sub_lock_sum, sub_rep_sum, sub_plaus_sum, missed_blocks')
         .eq('device_id', device.id)
         .lt('timestamp', timestamp)
         .order('timestamp', { ascending: false })
@@ -584,9 +651,22 @@ Deno.serve(async (req) => {
           amp_recent_mean: b.quality_soak_amp_recent_mean ?? null,
           reason_dominant: b.quality_soak_reason_dominant ?? null,
           stream_on: b.quality_soak_stream_on ?? null,
+          sub_amp_min: b.quality_soak_sub_amp_min ?? null,
+          sub_lock_min: b.quality_soak_sub_lock_min ?? null,
+          sub_rep_min: b.quality_soak_sub_rep_min ?? null,
+          sub_plaus_min: b.quality_soak_sub_plaus_min ?? null,
+          family_amp_hits: b.quality_soak_family_amp_hits ?? null,
+          family_lock_hits: b.quality_soak_family_lock_hits ?? null,
+          family_rep_hits: b.quality_soak_family_rep_hits ?? null,
+          family_plaus_hits: b.quality_soak_family_plaus_hits ?? null,
           interval_cycles: interval.cycles,
           interval_mean_score: interval.meanScore,
           interval_error_pct: interval.errorPct,
+          interval_sub_amp: interval.sub.amp,
+          interval_sub_lock: interval.sub.lock,
+          interval_sub_rep: interval.sub.rep,
+          interval_sub_plaus: interval.sub.plaus,
+          interval_missed_blocks: interval.missedBlocks,
           notehub_event: payload.event || null
         }, { onConflict: 'device_id,notehub_event', ignoreDuplicates: true })
 
